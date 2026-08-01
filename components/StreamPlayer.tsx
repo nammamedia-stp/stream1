@@ -993,6 +993,12 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
   }, [autoplayBlocked]);
 
   useEffect(() => {
+    if (videoRef.current) {
+      console.log('[PLAYER] video mounted');
+    }
+  }, []);
+
+  useEffect(() => {
     const handleFullscreenChange = () => {
       const doc = document as any;
       const isFS = !!(
@@ -1195,6 +1201,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
         setAutoplayBlocked(false);
         return true;
       } catch (mutedErr: any) {
+        console.warn('[PLAYER] autoplay blocked');
         console.error(`[PLAYER] Autoplay blocked by browser policy (${mutedErr?.name || 'NotAllowedError'}). Exposing Play control for user interaction:`, mutedErr);
         setAutoplayBlocked(true);
         setIsPlaying(false);
@@ -1303,6 +1310,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
             hls.on(Hls.Events.MEDIA_ATTACHED, () => {
               if (!active || currentSessionId !== playbackSessionIdRef.current) return;
+              console.log('[PLAYER] media attached');
               const cacheBustUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
               console.log(`[PLAYER HLS Session ${currentSessionId}] Media attached. Loading fresh manifest: ${cacheBustUrl}`);
               hls.loadSource(cacheBustUrl);
@@ -1310,6 +1318,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
             hls.on(Hls.Events.MANIFEST_PARSED, (event: any, data: any) => {
               if (!active || currentSessionId !== playbackSessionIdRef.current) return;
+              console.log('[PLAYER] manifest parsed');
               console.log(`[PLAYER HLS Session ${currentSessionId}] Manifest parsed successfully (${data.levels ? data.levels.length : 0} quality levels).`);
               nonFatalErrorCount = 0;
               isRecoveringRef.current = false;
@@ -1346,6 +1355,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
             const handlePlayingState = () => {
               if (!active || currentSessionId !== playbackSessionIdRef.current) return;
+              console.log('[PLAYER] playback started');
               setAutoplayBlocked(false);
               setIsPlaying(true);
             };
@@ -1376,6 +1386,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
               playbackSessionIdRef.current += 1;
               const recoverySessionId = playbackSessionIdRef.current;
 
+              console.log('[PLAYER] reconnect');
               console.log(`[PLAYER Recovery Session ${recoverySessionId}] OBS stream disconnected/stopped. Clearing video buffers and polling for stream start...`);
 
               if (hlsInstanceRef.current) {
@@ -1792,9 +1803,12 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
           ref={videoRef}
           className={`w-full h-full object-contain ${(stream.status === 'live' || isPlaying || isReconnectingUI) ? 'block' : 'hidden'}`}
           playsInline
+          preload="auto"
           autoPlay
+          muted={volume === 0}
           controls={false}
           onPlaying={() => {
+            console.log('[PLAYER] playback started');
             setAutoplayBlocked(false);
             setIsPlaying(true);
           }}

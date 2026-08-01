@@ -1294,11 +1294,15 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
               fragLoadingRetryDelay: 1000,
             });
 
-            const cacheBustUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
-            console.log(`[PLAYER HLS] Loading fresh manifest: ${cacheBustUrl}`);
-            hls.loadSource(cacheBustUrl);
             hls.attachMedia(video);
             hlsInstanceRef.current = hls;
+
+            hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+              if (!active) return;
+              const cacheBustUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+              console.log(`[PLAYER HLS] Media attached. Loading fresh manifest: ${cacheBustUrl}`);
+              hls.loadSource(cacheBustUrl);
+            });
 
             hls.on(Hls.Events.MANIFEST_PARSED, (event: any, data: any) => {
               if (!active) return;
@@ -1518,7 +1522,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
         dashPlayerRef.current = null;
       }
     };
-  }, [isPlaying, playerProtocol, hlsUrl, dashUrl, stream.status]);
+  }, [isPlaying, playerProtocol, stream.id, stream.streamKey, stream.status]);
 
   // Proactive Playback Auto-Resume & Continuity Watchdog
   useEffect(() => {

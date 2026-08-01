@@ -1184,7 +1184,6 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       await video.play();
       console.log('[PLAYER] Unmuted playback started successfully.');
       setAutoplayBlocked(false);
-      setIsPlaying(true);
       return true;
     } catch (err: any) {
       console.warn(`[PLAYER] Unmuted play blocked by browser policy (${err?.name || 'Error'}: ${err?.message || err}). Attempting muted fallback...`);
@@ -1193,7 +1192,6 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
         await video.play();
         console.log('[PLAYER] Fallback muted playback started successfully.');
         setAutoplayBlocked(false);
-        setIsPlaying(true);
         return true;
       } catch (mutedErr: any) {
         console.error(`[PLAYER] Autoplay blocked by browser policy (${mutedErr?.name || 'NotAllowedError'}). Exposing Play control for user interaction:`, mutedErr);
@@ -1338,6 +1336,12 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
               }
             });
 
+            const handlePlayingState = () => {
+              if (!active) return;
+              setAutoplayBlocked(false);
+              setIsPlaying(true);
+            };
+
             const handleCanPlay = () => {
               if (!active) return;
               if (video.paused && stream.status === 'live' && !autoplayBlockedRef.current) {
@@ -1347,6 +1351,13 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
             };
             video.addEventListener('canplay', handleCanPlay);
             video.addEventListener('loadeddata', handleCanPlay);
+            video.addEventListener('playing', handlePlayingState);
+            video.addEventListener('timeupdate', () => {
+              if (!active) return;
+              if (video.currentTime > 0) {
+                handlePlayingState();
+              }
+            });
 
             const triggerAutoRecovery = () => {
               if (!active || isRecoveringRef.current) return;
@@ -1516,12 +1527,6 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     const watchdogTimer = setInterval(() => {
       const video = videoRef.current;
       if (!video) return;
-
-      // If stream is live and video is paused (and not currently recovering or blocked by browser policy), auto-resume
-      if (stream.status === 'live' && video.paused && !isRecoveringRef.current && !autoplayBlockedRef.current) {
-        console.log('[PLAYER Watchdog] Stream is live but video element paused. Attempting auto-resume...');
-        safePlayVideo(video);
-      }
 
       // If video has errored or unloaded after playback had started, recover
       const isUnloadedAfterStart = hasReceivedFirstFragmentRef.current && video.readyState === 0;
@@ -1778,6 +1783,16 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
           playsInline
           autoPlay
           controls={false}
+          onPlaying={() => {
+            setAutoplayBlocked(false);
+            setIsPlaying(true);
+          }}
+          onTimeUpdate={(e) => {
+            if (e.currentTarget.currentTime > 0) {
+              setAutoplayBlocked(false);
+              setIsPlaying(true);
+            }
+          }}
         />
 
         {(stream.status === 'live' || isReconnectingUI) ? (

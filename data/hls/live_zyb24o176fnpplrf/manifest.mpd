@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<MPD xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+     xmlns="urn:mpeg:dash:schema:mpd:2011"
+     xsi:schemaLocation="urn:mpeg:dash:schema:mpd:2011 DASH-MPD.xsd"
+     profiles="urn:mpeg:dash:profile:isoff-live:2011"
+     type="static"
+     mediaPresentationDuration="PT0H5M0.00S"
+     minBufferTime="PT1.5S">
+  <Period id="0" start="PT0.0S">
+    <AdaptationSet id="0" contentType="video" segmentAlignment="true" bitstreamSwitching="true">
+      <Representation id="1080p" mimeType="video/mp4" codecs="avc1.64002a" width="1920" height="1080" frameRate="30" bandwidth="4500000">
+        <SegmentTemplate timescale="90000" initialization="1080p/init.m4s" media="1080p/segment-$Number$.m4s" startNumber="1" duration="360000"/>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>

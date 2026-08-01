@@ -1,0 +1,29 @@
+{
+  "deploymentMode": "auto",
+  "customDomain": "",
+  "manualIp": "",
+  "setupCompleted": true,
+  "ssl": {
+    "installed": false,
+    "status": "none",
+    "expirationDate": "",
+    "issuer": "",
+    "httpsStatus": "disabled"
+  },
+  "streaming": {
+    "rtmpPort": 1935,
+    "httpPort": 3000,
+    "httpsPort": 443,
+    "hlsSegmentDuration": 4,
+    "playlistLength": 5,
+    "recordingEnabled": false,
+    "ffmpegProfiles": {
+      "1080p": true,
+      "720p": true,
+      "480p": true,
+      "360p": true
+    }
+  },
+  "lastDetectedPublicIp": "34.34.244.77",
+  "timezone": "Asia/Calcutta"
+}

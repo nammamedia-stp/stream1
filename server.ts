@@ -3547,6 +3547,26 @@ ${reps}    </AdaptationSet>
         await logStreamAction(stream.id, stream.title, 'System/RTMP Ingest', 'disable', req.ip || '0.0.0.0', 'Stream disconnected from RTMP server');
       }
 
+      // Recursively delete HLS output directories for stream
+      const hlsDirs = [
+        `/var/www/hls/${streamKey}`,
+        path.resolve(`./data/hls/${streamKey}`)
+      ];
+
+      for (const hlsDir of hlsDirs) {
+        try {
+          if (fs.existsSync(hlsDir)) {
+            fs.rmSync(hlsDir, { recursive: true, force: true });
+          }
+        } catch (err: any) {
+          if (err?.code !== 'ENOENT') {
+            console.warn(`[Streaming Engine] Warning removing HLS directory ${hlsDir}:`, err?.message || err);
+          }
+        }
+      }
+
+      console.log(`[Streaming Engine] Removed HLS directory for ${streamKey}`);
+
       return res.status(200).send('OK');
     } catch (err) {
       console.error(`[RTMP Publish Done Callback] Error:`, err);

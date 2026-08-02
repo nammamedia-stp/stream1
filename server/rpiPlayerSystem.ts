@@ -644,22 +644,14 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
           console.log('[RPi Player] Manifest parsed successfully. Starting video playback.');
           videoEl.play().then(() => {
             isPlaying = true;
-            autoplayBlocked = false;
+            videoEl.muted = false; // Unmute if browser permits
             updateStatus('live', 'Live • ' + (videoEl.videoHeight || 1080) + 'p', fps + ' FPS');
-          }).catch((err) => {
-            console.warn('[RPi Player] Unmuted play blocked by browser policy. Retrying muted fallback...', err);
+          }).catch(() => {
+            // If browser autoplay blocks audio, play muted and retry
             videoEl.muted = true;
-            videoEl.play().then(() => {
-              isPlaying = true;
-              autoplayBlocked = false;
-              updateStatus('live', 'Live (Muted)', fps + ' FPS');
-            }).catch((mutedErr) => {
-              console.error('[RPi Player] Autoplay blocked by browser policy (NotAllowedError):', mutedErr);
-              isPlaying = false;
-              autoplayBlocked = true;
-              updateStatus('offline', 'Autoplay blocked • Press Play to start', '');
-              if (playOverlay) playOverlay.style.display = 'flex';
-            });
+            videoEl.play();
+            isPlaying = true;
+            updateStatus('live', 'Live (Muted)', fps + ' FPS');
           });
         });
 

@@ -35,23 +35,36 @@ cleanup() {
 
 trap 'cleanup' SIGTERM SIGINT SIGHUP SIGQUIT EXIT
 
-# Default HAS_AUDIO=1 (live streams from OBS/vMix always contain audio; mapped optionally via 0:a:0?)
-HAS_AUDIO=1
+sleep 1
 
-# Query dynamic stream profile configuration from local API (1s timeout)
-CONFIG_JSON=$(curl -s --connect-timeout 1 -m 1 "http://127.0.0.1:3000/api/rtmp/transcode-config/${STREAM_KEY}" || echo "")
+# Detect audio stream presence
+HAS_AUDIO=0
+AUDIO_COUNT=$(ffprobe -v error -rw_timeout 3000000 -select_streams a -show_entries stream=codec_name -of csv=p=0 "$RTMP_INPUT" 2>/dev/null | grep -c "[a-zA-Z0-9]" || true)
 
-# Generate FFmpeg command string in-memory
-FFMPEG_CMD=$(node - "$CONFIG_JSON" "$RTMP_INPUT" "$HLS_PATH" "$HAS_AUDIO" << 'EOF'
+if [ "$AUDIO_COUNT" -gt 0 ]; then
+    HAS_AUDIO=1
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Audio track detected in input stream." >> "$LOG_FILE"
+else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] No audio track detected. Proceeding with video-only transcode." >> "$LOG_FILE"
+fi
+
+# Query dynamic stream profile configuration from local API
+CONFIG_JSON=$(curl -sf --max-time 3 "http://127.0.0.1:3000/api/rtmp/transcode-config/${STREAM_KEY}" || echo "")
+
+FFMPEG_CMD_FILE="/tmp/ffmpeg_cmd_${STREAM_KEY}.sh"
+
+node - "$CONFIG_JSON" "$RTMP_INPUT" "$HLS_PATH" "$HAS_AUDIO" "$FFMPEG_CMD_FILE" << 'EOF'
 const fs = require('fs');
-const [,, configJsonStr, rtmpInput, hlsPath, hasAudioStr] = process.argv;
+const [,, configJsonStr, rtmpInput, hlsPath, hasAudioStr, outputFile] = process.argv;
 
 let config = null;
 try {
   if (configJsonStr && configJsonStr.trim().startsWith('{')) {
     config = JSON.parse(configJsonStr);
   }
-} catch (e) {}
+} catch (e) {
+  console.error("Config parse error:", e);
+}
 
 const hasAudio = hasAudioStr === '1';
 
@@ -65,12 +78,6 @@ let variants = [
 
 if (config && Array.isArray(config.variants) && config.variants.length > 0) {
   variants = config.variants;
-}
-
-// Remove stale master playlist to ensure immediate regeneration upon reconnect
-const masterPl = `${hlsPath}/master.m3u8`;
-if (fs.existsSync(masterPl)) {
-  try { fs.unlinkSync(masterPl); } catch (e) {}
 }
 
 // Create subdirectories for all variants
@@ -111,9 +118,6 @@ const filterComplex = filterParts.join(';\n ');
 const args = [
   'ffmpeg',
   '-y',
-  '-fflags', '+nobuffer',
-  '-probesize', '65536',
-  '-analyzeduration', '1000000',
   '-rw_timeout', '5000000',
   '-i', `"${rtmpInput}"`,
   '-filter_complex', `"${filterComplex}"`
@@ -158,7 +162,7 @@ args.push(
   '-f', 'hls',
   '-hls_time', '2',
   '-hls_list_size', '6',
-  '-hls_flags', 'delete_segments+append_list+independent_segments+omit_endlist',
+  '-hls_flags', 'delete_segments+independent_segments',
   '-hls_segment_type', 'mpegts',
   '-master_pl_name', 'master.m3u8',
   '-hls_segment_filename', `"${hlsPath}/%v/file%03d.ts"`,
@@ -166,18 +170,20 @@ args.push(
   `"${hlsPath}/%v/index.m3u8"`
 );
 
-console.log(args.join(' '));
+fs.writeFileSync(outputFile, args.join(' '));
 EOF
-)
+
+chmod +x "$FFMPEG_CMD_FILE" 2>/dev/null || true
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Executing FFmpeg production command..." >> "$LOG_FILE"
-echo "$FFMPEG_CMD" >> "$LOG_FILE"
+cat "$FFMPEG_CMD_FILE" >> "$LOG_FILE"
 echo "" >> "$LOG_FILE"
 
-eval "$FFMPEG_CMD >> \"$LOG_FILE\" 2>&1 &"
+bash "$FFMPEG_CMD_FILE" >> "$LOG_FILE" 2>&1 &
 FFMPEG_PID=$!
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] FFmpeg running with PID: $FFMPEG_PID" >> "$LOG_FILE"
 wait "$FFMPEG_PID"
 
+rm -f "$FFMPEG_CMD_FILE" 2>/dev/null || true
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Transcode process ended with exit code: $?" >> "$LOG_FILE"

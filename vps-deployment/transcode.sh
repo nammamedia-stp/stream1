@@ -162,7 +162,7 @@ args.push(
   '-f', 'hls',
   '-hls_time', '2',
   '-hls_list_size', '6',
-  '-hls_flags', 'delete_segments+independent_segments',
+  '-hls_flags', 'delete_segments+append_list+independent_segments+omit_endlist',
   '-hls_segment_type', 'mpegts',
   '-master_pl_name', 'master.m3u8',
   '-hls_segment_filename', `"${hlsPath}/%v/file%03d.ts"`,

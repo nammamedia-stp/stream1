@@ -39,7 +39,7 @@ sleep 1
 
 # Detect audio stream presence
 HAS_AUDIO=0
-AUDIO_COUNT=$(ffprobe -v error -rw_timeout 3000000 -select_streams a -show_entries stream=codec_name -of csv=p=0 "$RTMP_INPUT" 2>/dev/null | grep -c "[a-zA-Z0-9]" || true)
+AUDIO_COUNT=$(ffprobe -v error -rw_timeout 3000000 -probesize 65536 -analyzeduration 1000000 -select_streams a -show_entries stream=codec_name -of csv=p=0 "$RTMP_INPUT" 2>/dev/null | grep -c "[a-zA-Z0-9]" || true)
 
 if [ "$AUDIO_COUNT" -gt 0 ]; then
     HAS_AUDIO=1
@@ -80,6 +80,12 @@ if (config && Array.isArray(config.variants) && config.variants.length > 0) {
   variants = config.variants;
 }
 
+// Remove stale master playlist to ensure immediate regeneration upon reconnect
+const masterPl = `${hlsPath}/master.m3u8`;
+if (fs.existsSync(masterPl)) {
+  try { fs.unlinkSync(masterPl); } catch (e) {}
+}
+
 // Create subdirectories for all variants
 variants.forEach(v => {
   const vDir = `${hlsPath}/${v.name}`;
@@ -118,6 +124,9 @@ const filterComplex = filterParts.join(';\n ');
 const args = [
   'ffmpeg',
   '-y',
+  '-fflags', '+nobuffer',
+  '-probesize', '65536',
+  '-analyzeduration', '1000000',
   '-rw_timeout', '5000000',
   '-i', `"${rtmpInput}"`,
   '-filter_complex', `"${filterComplex}"`

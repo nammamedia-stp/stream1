@@ -1311,9 +1311,9 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
             hls.on(Hls.Events.MEDIA_ATTACHED, () => {
               if (!active || currentSessionId !== playbackSessionIdRef.current) return;
               console.log('[PLAYER] media attached');
-              const cacheBustUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
-              console.log(`[PLAYER HLS Session ${currentSessionId}] Media attached. Loading fresh manifest: ${cacheBustUrl}`);
-              hls.loadSource(cacheBustUrl);
+              const freshManifestUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+              console.log(`[PLAYER HLS Session ${currentSessionId}] Media attached. Loading fresh manifest: ${freshManifestUrl}`);
+              hls.loadSource(freshManifestUrl);
             });
 
             hls.on(Hls.Events.MANIFEST_PARSED, (event: any, data: any) => {

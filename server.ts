@@ -240,7 +240,6 @@ async function startServer() {
   // and guarantee accurate real-time streaming telemetry.
 
   // Streaming Engine global maps & helpers
-  const activeFfProcesses = new Map<string, any>();
   const deviceConnections = new Map<string, any>(); // deviceId -> WebSocket
   const dashboardConnections = new Set<any>(); // WebSockets for dashboards
 
@@ -308,45 +307,7 @@ async function startServer() {
     }
   };
 
-  const stopStreamIngestAndHls = async (streamKey: string) => {
-    console.log(`[Streaming Engine] Stopping FFmpeg process and HLS generation for Stream Key: ${streamKey}`);
-    
-    const proc = activeFfProcesses.get(streamKey);
-    if (proc) {
-      try {
-        proc.kill('SIGKILL');
-        console.log(`[Streaming Engine] Terminated tracked FFmpeg child process for key: ${streamKey}`);
-      } catch (e) {
-        console.error(`[Streaming Engine] Error killing process:`, e);
-      }
-      activeFfProcesses.delete(streamKey);
-    }
 
-    if (os.platform() !== 'win32') {
-      try {
-        const { execSync } = await import('child_process');
-        execSync(`pkill -9 -f "ffmpeg.*${streamKey}"`, { stdio: 'ignore' });
-        console.log(`[Streaming Engine] Successfully terminated system FFmpeg processes for: ${streamKey}`);
-      } catch (_) {}
-    }
-
-    const dirsToClean = [
-      path.resolve(`./data/hls/${streamKey}`),
-      path.resolve(`/var/www/hls/${streamKey}`),
-      path.resolve(`./data/dash/${streamKey}`)
-    ];
-
-    for (const d of dirsToClean) {
-      if (fs.existsSync(d)) {
-        try {
-          fs.rmSync(d, { recursive: true, force: true });
-          console.log(`[Streaming Engine] Removed stream storage folder: ${d}`);
-        } catch (e) {
-          console.error(`[Streaming Engine] Error removing folder ${d}:`, e);
-        }
-      }
-    }
-  };
 
   interface ResolutionSpec {
     name: string;
@@ -715,15 +676,16 @@ async function startServer() {
     return ffmpegArgs;
   };
 
-  const startFfMpegTranscoder = async (streamKey: string) => {
-    console.log(`[Streaming Engine] Starting fresh FFmpeg transcoder session for Stream Key: ${streamKey}`);
-    
-    // Purge any existing process and stale files to guarantee a clean state
-    await stopStreamIngestAndHls(streamKey);
+  const prepareStreamHlsDirectories = async (streamKey: string) => {
+    console.log(`[Streaming Engine] Preparing HLS playlist structure for Stream Key: ${streamKey}`);
 
     const hlsDir = path.resolve(`./data/hls/${streamKey}`);
-    if (!fs.existsSync(hlsDir)) {
-      fs.mkdirSync(hlsDir, { recursive: true });
+    const wwwHlsDir = path.resolve(`/var/www/hls/${streamKey}`);
+
+    for (const dir of [hlsDir, wwwHlsDir]) {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
     }
 
     // Retrieve stream from database
@@ -824,55 +786,24 @@ ${reps}    </AdaptationSet>
 </MPD>
 `;
 
-    try {
-      fs.writeFileSync(path.join(hlsDir, 'master.m3u8'), masterContent);
-      fs.writeFileSync(path.join(hlsDir, 'manifest.mpd'), dashContent);
-      
-      // Ensure subdirectories exist for each active profile (without pre-creating corrupt/dummy segment files)
-      finalActiveProfiles.forEach((p) => {
-        const safeName = p.name.toLowerCase().replace(/[^a-z0-9]/g, '');
-        const subDir = path.join(hlsDir, safeName);
-        if (!fs.existsSync(subDir)) {
-          fs.mkdirSync(subDir, { recursive: true });
-        }
-      });
-
-      console.log(`[Streaming Engine] Dynamically generated fresh master HLS & MPEG-DASH manifests for streamKey: ${streamKey}`);
-    } catch (err) {
-      console.error(`[Streaming Engine] Failed to write initial HLS/DASH files:`, err);
-    }
-
-    // Attempt to spawn an active FFmpeg transcoder if available
-    try {
-      const { spawn, execSync } = await import('child_process');
-      let hasFfmpeg = false;
+    for (const dir of [hlsDir, wwwHlsDir]) {
       try {
-        execSync('ffmpeg -version', { stdio: 'ignore' });
-        hasFfmpeg = true;
-      } catch (e) {
-        console.log(`[Streaming Engine] FFmpeg not found on path, operating in fallback static emulator mode.`);
-      }
-
-      if (hasFfmpeg) {
-        console.log(`[Streaming Engine] Spawning active FFmpeg background transcode process...`);
+        fs.writeFileSync(path.join(dir, 'master.m3u8'), masterContent);
+        fs.writeFileSync(path.join(dir, 'manifest.mpd'), dashContent);
         
-        const rtmpPort = serverSettings.streaming?.rtmpPort || 1935;
-        const rtmpInputUrl = `rtmp://127.0.0.1:${rtmpPort}/live/${streamKey}`;
-        const ffmpegArgs = generateFfmpegArguments(finalActiveProfiles, hlsDir, rtmpInputUrl);
-
-        console.log(`[Streaming Engine] FFmpeg generated args: ffmpeg ${ffmpegArgs.join(' ')}`);
-
-        const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
-
-        ffmpegProcess.on('close', (code) => {
-          console.log(`[Streaming Engine] FFmpeg transcode closed with code ${code}`);
+        finalActiveProfiles.forEach((p) => {
+          const safeName = p.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+          const subDir = path.join(dir, safeName);
+          if (!fs.existsSync(subDir)) {
+            fs.mkdirSync(subDir, { recursive: true });
+          }
         });
-
-        activeFfProcesses.set(streamKey, ffmpegProcess);
+      } catch (err) {
+        console.error(`[Streaming Engine] Failed to write initial HLS/DASH files in ${dir}:`, err);
       }
-    } catch (err) {
-      console.error(`[Streaming Engine] Failed to spawn FFmpeg process:`, err);
     }
+
+    console.log(`[Streaming Engine] Master HLS playlists prepared for streamKey: ${streamKey}`);
   };
 
   // ----------------------------------------------------
@@ -2475,7 +2406,7 @@ ${reps}    </AdaptationSet>
         command = 'nginx -s reload || systemctl reload nginx';
         break;
       case 'restart_ffmpeg':
-        command = 'pkill -f ffmpeg';
+        command = 'echo "FFmpeg transcoder managed by Nginx exec_push"';
         break;
       case 'restart_postgres':
         command = 'systemctl restart postgresql || service postgresql restart';
@@ -3275,11 +3206,10 @@ ${reps}    </AdaptationSet>
         return res.status(500).json({ error: 'Failed to persist profile deletion' });
       }
 
-      // If stream is live, restart its FFmpeg transcode pipeline with the updated profiles list
+      // If stream is live, prepare updated HLS manifest structure
       if (updatedStream.status === 'live') {
-        console.log(`[Streaming Engine] Stream ${streamId} is active. Restarting FFmpeg transcoder for streamKey: ${updatedStream.streamKey}`);
-        await stopStreamIngestAndHls(updatedStream.streamKey);
-        await startFfMpegTranscoder(updatedStream.streamKey);
+        console.log(`[Streaming Engine] Stream ${streamId} is active. Updating HLS directory structure for streamKey: ${updatedStream.streamKey}`);
+        await prepareStreamHlsDirectories(updatedStream.streamKey);
       }
 
       const augmented = await augmentStreamWithPlayback(updatedStream, req);
@@ -3423,9 +3353,6 @@ ${reps}    </AdaptationSet>
         viewers: 0
       });
 
-      // Stop FFmpeg process, HLS generation and mark offline
-      await stopStreamIngestAndHls(stream.streamKey);
-
       // Save Disable log
       await logStreamAction(id, stream.title, req.user.username, 'disable', req.ip || '0.0.0.0', 'Stream disabled by administrator/user');
 
@@ -3526,8 +3453,8 @@ ${reps}    </AdaptationSet>
       // Allow connection
       console.log(`[RTMP Publish Callback] Accepted RTMP stream for key "${streamKey}". Title: "${stream.title}"`);
       
-      // Auto-start FFmpeg and Resume HLS generation
-      await startFfMpegTranscoder(streamKey);
+      // Prepare HLS directory structure and manifests (transcoding is managed by Nginx exec_push -> transcode.sh)
+      await prepareStreamHlsDirectories(streamKey);
 
       // Transition to 'live' in database
       await db.updateStream(stream.id, { 
@@ -3572,9 +3499,6 @@ ${reps}    </AdaptationSet>
     try {
       const stream = await db.getStreamByKey(streamKey);
       if (stream) {
-        // Clean up FFmpeg transcode processes
-        await stopStreamIngestAndHls(streamKey);
-
         // Transition to 'offline' in database
         await db.updateStream(stream.id, { 
           status: 'offline',
@@ -4836,10 +4760,9 @@ ${reps}    </AdaptationSet>
           }
 
           const isHlsFresh = (Date.now() - lastMtime) < 5000;
-          const isFfRunning = activeFfProcesses.has(s.streamKey);
 
-          // Stream is considered active if FFmpeg process is running OR master playlist was updated in the last 5 seconds
-          const isCurrentlyActive = (isFfRunning || isHlsFresh) && lastMtime > 0;
+          // Stream is considered active if master playlist was updated in the last 5 seconds
+          const isCurrentlyActive = isHlsFresh && lastMtime > 0;
 
           if (isCurrentlyActive) {
             activeCount++;

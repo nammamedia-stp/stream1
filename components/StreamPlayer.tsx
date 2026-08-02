@@ -1287,23 +1287,34 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
             const hls = new Hls({
               enableWorker: true,
               lowLatencyMode: true,
-              maxBufferLength: isMobile ? 10 : 30,
-              maxMaxBufferLength: isMobile ? 20 : 60,
-              maxBufferSize: isMobile ? 30 * 1024 * 1024 : 60 * 1024 * 1024,
-              maxBufferHole: 0.5,
-              highBufferWatchdogPeriod: 2,
+              maxBufferLength: isMobile ? 5 : 10,
+              maxMaxBufferLength: isMobile ? 10 : 20,
+              maxBufferSize: isMobile ? 10 * 1024 * 1024 : 20 * 1024 * 1024,
+              maxBufferHole: 0.3,
+              highBufferWatchdogPeriod: 1,
               nudgeOffset: 0.1,
               nudgeMaxRetry: 5,
-              liveSyncDurationCount: 3,
-              liveMaxLatencyDurationCount: 10,
+              liveSyncDurationCount: 1,
+              liveMaxLatencyDurationCount: 3,
+              backBufferLength: 0,
+              startPosition: -1,
               capLevelToPlayerSize: isMobile,
               manifestLoadingMaxRetry: 30,
-              manifestLoadingRetryDelay: 1000,
-              manifestLoadingMaxRetryTimeout: 60000,
+              manifestLoadingRetryDelay: 500,
+              manifestLoadingMaxRetryTimeout: 30000,
               levelLoadingMaxRetry: 30,
-              levelLoadingRetryDelay: 1000,
+              levelLoadingRetryDelay: 500,
+              levelLoadingMaxRetryTimeout: 30000,
               fragLoadingMaxRetry: 30,
-              fragLoadingRetryDelay: 1000,
+              fragLoadingRetryDelay: 500,
+              fragLoadingMaxRetryTimeout: 30000,
+              xhrSetup: (xhr: XMLHttpRequest, url: string) => {
+                if (url.includes('.m3u8')) {
+                  xhr.setRequestHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+                  xhr.setRequestHeader('Pragma', 'no-cache');
+                  xhr.setRequestHeader('Expires', '0');
+                }
+              }
             });
 
             hls.attachMedia(video);
@@ -1333,7 +1344,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
             hls.on(Hls.Events.MANIFEST_PARSED, (event: any, data: any) => {
               if (!active || currentSessionId !== playbackSessionIdRef.current) return;
               console.log('[PLAYER] manifest parsed');
-              console.log(`[PLAYER HLS Session ${currentSessionId}] Manifest parsed successfully (${data.levels ? data.levels.length : 0} quality levels).`);
+              console.log(`[PLAYER HLS Session ${currentSessionId}] Manifest parsed successfully (${data.levels ? data.levels.length : 0} quality levels). Autoplay immediately after MANIFEST_PARSED.`);
               nonFatalErrorCount = 0;
               isRecoveringRef.current = false;
               setIsReconnectingUI(false);
@@ -1353,7 +1364,8 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
               const uniqueLevels = Array.from(new Set(levels));
               setQualityLevels(['Auto', ...uniqueLevels]);
 
-              // Wait for FRAG_BUFFERED or canplay before attempting play
+              // Autoplay immediately after MANIFEST_PARSED
+              attemptPlayOnce();
             });
 
             // Listen for first fragment buffered to resume playback once media frame is ready

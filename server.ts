@@ -3453,13 +3453,35 @@ ${reps}    </AdaptationSet>
       // Allow connection
       console.log(`[RTMP Publish Callback] Accepted RTMP stream for key "${streamKey}". Title: "${stream.title}"`);
       
+      // 1. Transition state machine: OFFLINE -> CONNECTING
+      await db.updateStream(stream.id, { 
+        status: 'connecting' as any,
+        startTime: new Date().toISOString()
+      });
+
+      const connectingStream = await db.getStreamByKey(streamKey);
+      const augmentedConnecting = connectingStream ? await augmentStreamWithPlayback(connectingStream, req) : null;
+
+      console.log(`[Stream Monitor] [State Transition] Stream "${stream.title}" (${streamKey}) -> CONNECTING via RTMP publish callback`);
+      broadcastToDashboards({
+        type: 'stream_status_change',
+        streamId: stream.id,
+        streamKey: streamKey,
+        status: 'connecting',
+        stream: augmentedConnecting
+      });
+      broadcastToDashboards({
+        type: 'stream_updated',
+        streamId: stream.id,
+        stream: augmentedConnecting
+      });
+
       // Prepare HLS directory structure and manifests (transcoding is managed by Nginx exec_push -> transcode.sh)
       await prepareStreamHlsDirectories(streamKey);
 
-      // Transition to 'live' in database
+      // 2. Transition state machine: CONNECTING -> LIVE
       await db.updateStream(stream.id, { 
-        status: 'live',
-        startTime: new Date().toISOString()
+        status: 'live'
       });
 
       const updatedStream = await db.getStreamByKey(streamKey);
@@ -4745,48 +4767,11 @@ ${reps}    </AdaptationSet>
         for (const s of streams) {
           if (s.status === 'disabled') continue;
 
-          const hlsKeyDir = getHlsDir(s.streamKey);
-          const masterPath = path.join(hlsKeyDir, 'master.m3u8');
-          const index720Path = path.join(hlsKeyDir, '720p', 'index.m3u8');
-
-          let lastMtime = 0;
-
-          if (fs.existsSync(masterPath)) {
-            const stat = fs.statSync(masterPath);
-            lastMtime = stat.mtimeMs;
-          } else if (fs.existsSync(index720Path)) {
-            const stat = fs.statSync(index720Path);
-            lastMtime = stat.mtimeMs;
-          }
-
-          const isHlsFresh = (Date.now() - lastMtime) < 5000;
-
-          // Stream is considered active if master playlist was updated in the last 5 seconds
-          const isCurrentlyActive = isHlsFresh && lastMtime > 0;
-
-          if (isCurrentlyActive) {
+          // RTMP publish and publish_done are the source of truth for stream status.
+          // Never use HLS file existence alone to determine stream status.
+          if (s.status === 'live' || (s.status as string) === 'connecting') {
             activeCount++;
             totalViewers += (s.viewers || 0);
-
-            if (s.status !== 'live') {
-              console.log(`[Stream Monitor] [State Transition] Stream "${s.title}" (${s.streamKey}) is actively broadcasting. Updating status -> LIVE`);
-              await db.updateStream(s.id, { status: 'live', startTime: s.startTime || new Date().toISOString() });
-              broadcastToDashboards({
-                type: 'stream_status_change',
-                streamId: s.id,
-                streamKey: s.streamKey,
-                status: 'live'
-              });
-            }
-          } else if (!isCurrentlyActive && s.status === 'live') {
-            console.log(`[Stream Monitor] [State Transition] Stream "${s.title}" (${s.streamKey}) HLS update stale / FFmpeg terminated. Updating status -> OFFLINE`);
-            await db.updateStream(s.id, { status: 'offline', viewers: 0 });
-            broadcastToDashboards({
-              type: 'stream_status_change',
-              streamId: s.id,
-              streamKey: s.streamKey,
-              status: 'offline'
-            });
           }
         }
 

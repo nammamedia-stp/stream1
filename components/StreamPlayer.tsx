@@ -1259,6 +1259,8 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       // Clean up previous Hls instance & reset video element before re-attaching
       if (hlsInstanceRef.current) {
         try {
+          console.log(`[PLAYER Session ${currentSessionId}] Teardown stale Hls instance: stopLoad(), detachMedia(), destroy().`);
+          hlsInstanceRef.current.stopLoad();
           hlsInstanceRef.current.detachMedia();
           hlsInstanceRef.current.destroy();
         } catch (_) {}
@@ -1308,6 +1310,18 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
             hls.attachMedia(video);
             hlsInstanceRef.current = hls;
 
+            let playAttempted = false;
+            const attemptPlayOnce = () => {
+              if (playAttempted) return;
+              if (!active || currentSessionId !== playbackSessionIdRef.current) return;
+              const v = videoRef.current;
+              if (!v || !v.paused || autoplayBlockedRef.current || stream.status !== 'live') return;
+
+              playAttempted = true;
+              console.log(`[PLAYER HLS Session ${currentSessionId}] Attempting play() once...`);
+              safePlayVideo(v);
+            };
+
             hls.on(Hls.Events.MEDIA_ATTACHED, () => {
               if (!active || currentSessionId !== playbackSessionIdRef.current) return;
               console.log('[PLAYER] media attached');
@@ -1339,18 +1353,14 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
               const uniqueLevels = Array.from(new Set(levels));
               setQualityLevels(['Auto', ...uniqueLevels]);
 
-              // Trigger initial playback request with Promise handling
-              safePlayVideo(video);
+              attemptPlayOnce();
             });
 
             // Listen for first fragment buffered to resume playback once media frame is ready
             hls.on(Hls.Events.FRAG_BUFFERED, () => {
               if (!active || currentSessionId !== playbackSessionIdRef.current) return;
               hasReceivedFirstFragmentRef.current = true;
-              if (video.paused && stream.status === 'live' && !autoplayBlockedRef.current) {
-                console.log(`[PLAYER HLS Session ${currentSessionId}] First fragment buffered. Attempting auto-play...`);
-                safePlayVideo(video);
-              }
+              attemptPlayOnce();
             });
 
             const handlePlayingState = () => {
@@ -1362,10 +1372,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
             const handleCanPlay = () => {
               if (!active || currentSessionId !== playbackSessionIdRef.current) return;
-              if (video.paused && stream.status === 'live' && !autoplayBlockedRef.current) {
-                console.log(`[PLAYER HLS Session ${currentSessionId}] Video element ready (canplay/loadeddata). Triggering safePlayVideo...`);
-                safePlayVideo(video);
-              }
+              attemptPlayOnce();
             };
             video.addEventListener('canplay', handleCanPlay);
             video.addEventListener('loadeddata', handleCanPlay);
@@ -1391,6 +1398,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
               if (hlsInstanceRef.current) {
                 try {
+                  hlsInstanceRef.current.stopLoad();
                   hlsInstanceRef.current.detachMedia();
                   hlsInstanceRef.current.destroy();
                 } catch (_) {}
@@ -1528,6 +1536,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       if (recoveryTimer) clearInterval(recoveryTimer);
       if (hlsInstanceRef.current) {
         try {
+          hlsInstanceRef.current.stopLoad();
           hlsInstanceRef.current.detachMedia();
           hlsInstanceRef.current.destroy();
         } catch (_) {}

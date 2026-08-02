@@ -3555,13 +3555,19 @@ ${reps}    </AdaptationSet>
 
       for (const hlsDir of hlsDirs) {
         try {
+          console.log("[HLS CLEANUP] Checking:", hlsDir);
+
           if (fs.existsSync(hlsDir)) {
+            console.log("[HLS CLEANUP] Removing:", hlsDir);
+
             fs.rmSync(hlsDir, { recursive: true, force: true });
+
+            console.log("[HLS CLEANUP] Removed:", hlsDir);
+          } else {
+            console.log("[HLS CLEANUP] Directory not found:", hlsDir);
           }
         } catch (err: any) {
-          if (err?.code !== 'ENOENT') {
-            console.warn(`[Streaming Engine] Warning removing HLS directory ${hlsDir}:`, err?.message || err);
-          }
+          console.error("[HLS CLEANUP] ERROR:", err);
         }
       }
 

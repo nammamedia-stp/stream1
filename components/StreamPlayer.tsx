@@ -1206,6 +1206,8 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     let active = true;
     let recoveryTimer: any = null;
     let nonFatalErrorCount = 0;
+    let handleCanPlayFn: any = null;
+    let handleStallOrEndFn: any = null;
 
     const initPlayer = async () => {
       const video = videoRef.current;
@@ -1303,20 +1305,68 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
               }
             });
 
-            const handleCanPlay = () => {
+            handleCanPlayFn = () => {
               if (!active) return;
               if (video.paused && stream.status === 'live') {
                 safePlayVideo(video);
               }
             };
-            video.addEventListener('canplay', handleCanPlay);
-            video.addEventListener('loadeddata', handleCanPlay);
+            video.addEventListener('canplay', handleCanPlayFn);
+            video.addEventListener('loadeddata', handleCanPlayFn);
+
+            const startNetworkRecovery = () => {
+              if (!active || isRecoveringRef.current) return;
+              isRecoveringRef.current = true;
+              setIsReconnectingUI(true);
+              console.log('[HLS Recovery Engine] Network error or missing playlist detected. Keeping HLS instance alive and starting recovery polling...');
+
+              try {
+                hls.stopLoad();
+              } catch (e) {
+                console.warn('[HLS Recovery Engine] Error in hls.stopLoad():', e);
+              }
+
+              if (recoveryTimer) clearInterval(recoveryTimer);
+
+              const checkAndResume = async () => {
+                if (!active) {
+                  if (recoveryTimer) clearInterval(recoveryTimer);
+                  isRecoveringRef.current = false;
+                  setIsReconnectingUI(false);
+                  return;
+                }
+                try {
+                  const freshManifestUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+                  const res = await fetch(freshManifestUrl, { method: 'GET', cache: 'no-store' });
+                  if (res.ok) {
+                    const text = await res.text();
+                    if (text && text.includes('#EXTM3U')) {
+                      console.log('[HLS Recovery Engine] Live playlist detected! Reloading source on existing HLS instance...');
+                      if (recoveryTimer) clearInterval(recoveryTimer);
+
+                      hls.stopLoad();
+                      hls.loadSource(freshManifestUrl);
+                      hls.startLoad(-1);
+                      safePlayVideo(video);
+
+                      isRecoveringRef.current = false;
+                      setIsReconnectingUI(false);
+                      nonFatalErrorCount = 0;
+                    }
+                  }
+                } catch (e) {
+                  // Stream is offline or network error; interval will poll again in 1000ms
+                }
+              };
+
+              recoveryTimer = setInterval(checkAndResume, 1000);
+            };
 
             const triggerAutoRecovery = () => {
               if (!active || isRecoveringRef.current) return;
               isRecoveringRef.current = true;
               setIsReconnectingUI(true);
-              console.log('[HLS Recovery Engine] HLS stream interrupted or offline. Clearing video buffers and starting recovery poll...');
+              console.log('[HLS Recovery Engine] Unrecoverable non-network error detected. Destroying player instance and recovering...');
 
               if (hlsInstanceRef.current) {
                 try {
@@ -1332,7 +1382,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
               if (recoveryTimer) clearInterval(recoveryTimer);
 
-              const checkAndResume = async () => {
+              const checkAndResumeHard = async () => {
                 if (!active) {
                   if (recoveryTimer) clearInterval(recoveryTimer);
                   isRecoveringRef.current = false;
@@ -1340,12 +1390,12 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
                   return;
                 }
                 try {
-                  const checkUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
-                  const res = await fetch(checkUrl, { method: 'GET', cache: 'no-store' });
+                  const freshManifestUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+                  const res = await fetch(freshManifestUrl, { method: 'GET', cache: 'no-store' });
                   if (res.ok) {
                     const text = await res.text();
                     if (text && text.includes('#EXTM3U')) {
-                      console.log('[HLS Recovery Engine] Stream playlist detected LIVE! Re-attaching player and recovering playback automatically...');
+                      console.log('[HLS Recovery Engine] Stream playlist detected LIVE! Re-initializing player...');
                       if (recoveryTimer) clearInterval(recoveryTimer);
                       isRecoveringRef.current = false;
                       setIsReconnectingUI(false);
@@ -1353,53 +1403,42 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
                     }
                   }
                 } catch (e) {
-                  // Keep polling until OBS stream is active again
+                  // Keep polling
                 }
               };
 
-              checkAndResume();
-              recoveryTimer = setInterval(checkAndResume, 1000);
+              recoveryTimer = setInterval(checkAndResumeHard, 1000);
             };
 
             hls.on(Hls.Events.ERROR, (event: any, data: any) => {
               if (!active) return;
 
-              if (data.fatal) {
-                console.warn(`[HLS Engine] Fatal error detected (${data.type}, ${data.details}). Triggering recovery flow...`);
-                switch (data.type) {
-                  case Hls.ErrorTypes.MEDIA_ERROR:
-                    console.warn('[HLS Engine] Media buffer error, attempting media recovery...');
-                    try {
-                      hls.recoverMediaError();
-                    } catch (e) {
-                      triggerAutoRecovery();
-                    }
-                    break;
-                  case Hls.ErrorTypes.NETWORK_ERROR:
-                  default:
-                    triggerAutoRecovery();
-                    break;
+              if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                console.warn(`[HLS Engine] Network error detected (${data.details}, fatal: ${data.fatal}). Starting network recovery...`);
+                startNetworkRecovery();
+              } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                console.warn(`[HLS Engine] Media error detected (${data.details}, fatal: ${data.fatal}). Attempting recoverMediaError...`);
+                try {
+                  hls.recoverMediaError();
+                } catch (e) {
+                  console.error('[HLS Engine] recoverMediaError failed:', e);
+                  triggerAutoRecovery();
                 }
-              } else {
-                if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                  nonFatalErrorCount++;
-                  if (nonFatalErrorCount > 6) {
-                    console.warn('[HLS Engine] Persistent non-fatal network errors detected, initiating stream recovery...');
-                    triggerAutoRecovery();
-                  }
-                }
+              } else if (data.fatal) {
+                console.warn(`[HLS Engine] Fatal unrecoverable error detected (${data.type}, ${data.details}). Triggering auto recovery...`);
+                triggerAutoRecovery();
               }
             });
 
             // Monitor video element stall/ended/error events
-            const handleStallOrEnd = () => {
+            handleStallOrEndFn = () => {
               if (!active) return;
-              console.warn('[HLS Engine] Video element stalled or ended during live playback. Checking stream status and starting recovery...');
-              triggerAutoRecovery();
+              console.warn('[HLS Engine] Video element stalled or ended during live playback. Starting network recovery...');
+              startNetworkRecovery();
             };
 
-            video.addEventListener('ended', handleStallOrEnd);
-            video.addEventListener('error', handleStallOrEnd);
+            video.addEventListener('ended', handleStallOrEndFn);
+            video.addEventListener('error', handleStallOrEndFn);
 
           } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
             const cacheBustUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
@@ -1456,6 +1495,21 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       active = false;
       isRecoveringRef.current = false;
       if (recoveryTimer) clearInterval(recoveryTimer);
+      const video = videoRef.current;
+      if (video) {
+        if (handleCanPlayFn) {
+          try {
+            video.removeEventListener('canplay', handleCanPlayFn);
+            video.removeEventListener('loadeddata', handleCanPlayFn);
+          } catch (_) {}
+        }
+        if (handleStallOrEndFn) {
+          try {
+            video.removeEventListener('ended', handleStallOrEndFn);
+            video.removeEventListener('error', handleStallOrEndFn);
+          } catch (_) {}
+        }
+      }
       if (hlsInstanceRef.current) {
         try {
           hlsInstanceRef.current.detachMedia();

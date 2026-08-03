@@ -1137,35 +1137,16 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     } else {
       console.log(`[StreamPlayer Engine] Stream "${stream.title}" status is ${stream.status ? stream.status.toUpperCase() : 'OFFLINE'}. Flushing video buffers and stopping player...`);
       setIsPlaying(false);
-      setIsReconnectingUI(false);
-      isRecoveringRef.current = false;
-      // Immediate stream loss cleanup: stop video, flush buffer, destroy player instance
-      if (hlsInstanceRef.current) {
-        try {
-          hlsInstanceRef.current.stopLoad();
-          hlsInstanceRef.current.detachMedia();
-          hlsInstanceRef.current.destroy();
-        } catch (_) {}
-        hlsInstanceRef.current = null;
-      }
-      if (dashPlayerRef.current) {
-        try {
-          dashPlayerRef.current.destroy();
-        } catch (_) {}
-        dashPlayerRef.current = null;
-      }
-      if (videoRef.current) {
-        resetVideoElement(videoRef.current);
-      }
+      cleanupAndResetPlayer('stream_status_offline');
     }
   }, [stream.status]);
 
   // Refs for tracking recovery and reconnect engine state across playback lifecycles
+  const playbackSessionIdRef = useRef<number>(0);
   const isRecoveringRef = useRef<boolean>(false);
   const isPollingRef = useRef<boolean>(false);
   const reconnectTimerRef = useRef<any>(null);
   const videoListenersRef = useRef<Array<{ type: string; fn: any }>>([]);
-  const startReconnectEngineRef = useRef<any>(null);
 
   // Helper to safely execute play with muted fallback if browser blocks unmuted play (NEVER set volume state to 0)
   const safePlayVideo = async (video: HTMLVideoElement) => {
@@ -1203,8 +1184,17 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     }
   };
 
-  // Complete clean up helper for old player instance and video listeners
-  const cleanupHlsAndListeners = () => {
+  // Fully clean up and destroy any active HLS or DASH instances, timers, and event listeners
+  const cleanupAndResetPlayer = (reason: string = 'unspecified') => {
+    playbackSessionIdRef.current += 1;
+    const currentSessionId = playbackSessionIdRef.current;
+    console.log(`[RECONNECT] destroying old player (reason: ${reason}, new sessionId: ${currentSessionId})`);
+
+    if (reconnectTimerRef.current) {
+      clearInterval(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+
     const video = videoRef.current;
     if (video && videoListenersRef.current.length > 0) {
       videoListenersRef.current.forEach(({ type, fn }) => {
@@ -1224,227 +1214,239 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       hlsInstanceRef.current = null;
     }
 
+    if (dashPlayerRef.current) {
+      try {
+        dashPlayerRef.current.destroy();
+      } catch (_) {}
+      dashPlayerRef.current = null;
+    }
+
     if (video) {
       resetVideoElement(video);
     }
-  };
 
-  // Reset every recovery flag, timer, lock, and counter after successful reconnect or session stop
-  const resetReconnectState = () => {
     isRecoveringRef.current = false;
     isPollingRef.current = false;
     setIsReconnectingUI(false);
+    console.log(`[RECONNECT] state reset (sessionId: ${currentSessionId})`);
+  };
+
+  // Single Reconnect Engine: Polls for manifest and reinstantiates player when manifest becomes available
+  const startReconnectEngine = (HlsClass: any, reason: string = 'unspecified') => {
+    if (isPollingRef.current) {
+      console.log(`[RECONNECT] Already reconnecting/polling (reason: ${reason}), skipping duplicate call.`);
+      return;
+    }
+
+    console.log(`[RECONNECT] started (reason: ${reason})`);
+    isPollingRef.current = true;
+    isRecoveringRef.current = true;
+    setIsReconnectingUI(true);
+
+    playbackSessionIdRef.current += 1;
+    const sessionForReconnect = playbackSessionIdRef.current;
+    console.log(`[RECONNECT] destroying old player for reconnect (sessionId: ${sessionForReconnect})`);
+
     if (reconnectTimerRef.current) {
       clearInterval(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
     }
-    console.log('[RECONNECT] state reset');
+
+    const video = videoRef.current;
+    if (video && videoListenersRef.current.length > 0) {
+      videoListenersRef.current.forEach(({ type, fn }) => {
+        try { video.removeEventListener(type, fn); } catch (_) {}
+      });
+      videoListenersRef.current = [];
+    }
+
+    if (hlsInstanceRef.current) {
+      try {
+        hlsInstanceRef.current.stopLoad();
+        hlsInstanceRef.current.detachMedia();
+        hlsInstanceRef.current.destroy();
+      } catch (_) {}
+      hlsInstanceRef.current = null;
+    }
+
+    if (video) {
+      resetVideoElement(video);
+    }
+
+    const pollForManifest = async () => {
+      if (sessionForReconnect !== playbackSessionIdRef.current) {
+        console.log(`[RECONNECT] Stale session ${sessionForReconnect} during polling, stopping timer.`);
+        if (reconnectTimerRef.current) {
+          clearInterval(reconnectTimerRef.current);
+          reconnectTimerRef.current = null;
+        }
+        isPollingRef.current = false;
+        return;
+      }
+
+      console.log(`[RECONNECT] polling (sessionId: ${sessionForReconnect})`);
+
+      try {
+        const freshManifestUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+        const res = await fetch(freshManifestUrl, { method: 'GET', cache: 'no-store' });
+        if (res.ok) {
+          const text = await res.text();
+          if (text && text.includes('#EXTM3U')) {
+            console.log(`[RECONNECT] manifest found (sessionId: ${sessionForReconnect})`);
+            if (reconnectTimerRef.current) {
+              clearInterval(reconnectTimerRef.current);
+              reconnectTimerRef.current = null;
+            }
+            isPollingRef.current = false;
+            createAndAttachHlsInstance(HlsClass, freshManifestUrl, sessionForReconnect);
+          }
+        }
+      } catch (e) {
+        // Stream still offline/reconnecting, polling continues
+      }
+    };
+
+    reconnectTimerRef.current = setInterval(pollForManifest, 1000);
+  };
+
+  const createAndAttachHlsInstance = (HlsClass: any, manifestUrl: string, sessionId: number) => {
+    const video = videoRef.current;
+    if (!video || sessionId !== playbackSessionIdRef.current) {
+      console.log(`[RECONNECT] Cannot create instance: video present=${!!video}, sessionId match=${sessionId === playbackSessionIdRef.current}`);
+      return;
+    }
+
+    console.log(`[RECONNECT] creating new player (sessionId: ${sessionId})`);
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+    const hls = new HlsClass({
+      enableWorker: true,
+      lowLatencyMode: true,
+      maxBufferLength: isMobile ? 10 : 30,
+      maxMaxBufferLength: isMobile ? 20 : 60,
+      maxBufferSize: isMobile ? 30 * 1024 * 1024 : 60 * 1024 * 1024,
+      maxBufferHole: 0.5,
+      highBufferWatchdogPeriod: 2,
+      nudgeOffset: 0.1,
+      nudgeMaxRetry: 5,
+      liveSyncDurationCount: 3,
+      liveMaxLatencyDurationCount: 10,
+      capLevelToPlayerSize: isMobile,
+      manifestLoadingMaxRetry: 30,
+      manifestLoadingRetryDelay: 1000,
+      manifestLoadingMaxRetryTimeout: 60000,
+      levelLoadingMaxRetry: 30,
+      levelLoadingRetryDelay: 1000,
+      fragLoadingMaxRetry: 30,
+      fragLoadingRetryDelay: 1000,
+    });
+
+    hlsInstanceRef.current = hls;
+
+    console.log(`[RECONNECT] media attached (sessionId: ${sessionId})`);
+    hls.attachMedia(video);
+    hls.loadSource(manifestUrl);
+
+    hls.on(HlsClass.Events.MANIFEST_PARSED, (event: any, data: any) => {
+      if (sessionId !== playbackSessionIdRef.current) return;
+      console.log(`[RECONNECT] manifest parsed (sessionId: ${sessionId})`);
+      hls.currentLevel = -1;
+
+      if (isMobile && data.levels && data.levels.length > 1) {
+        const defaultMobileIdx = data.levels.findIndex((l: any) => l.height && l.height <= 720 && l.height >= 480);
+        if (defaultMobileIdx !== -1) {
+          hls.startLevel = defaultMobileIdx;
+        }
+      }
+
+      const levels = data.levels.map((l: any) => {
+        if (l.height && l.height > 0) return `${l.height}p`;
+        return 'Original';
+      });
+      const uniqueLevels = Array.from(new Set(levels));
+      setQualityLevels(['Auto', ...uniqueLevels]);
+
+      safePlayVideo(video);
+      console.log(`[RECONNECT] playback started (sessionId: ${sessionId})`);
+    });
+
+    const resetStateAfterPlayback = () => {
+      if (sessionId !== playbackSessionIdRef.current) return;
+      console.log(`[RECONNECT] recovery complete (sessionId: ${sessionId})`);
+      isRecoveringRef.current = false;
+      isPollingRef.current = false;
+      setIsReconnectingUI(false);
+      if (reconnectTimerRef.current) {
+        clearInterval(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      console.log(`[RECONNECT] state reset (sessionId: ${sessionId})`);
+    };
+
+    hls.on(HlsClass.Events.FRAG_BUFFERED, () => {
+      resetStateAfterPlayback();
+      if (video.paused && stream.status === 'live') {
+        safePlayVideo(video);
+      }
+    });
+
+    hls.on(HlsClass.Events.ERROR, (event: any, data: any) => {
+      if (sessionId !== playbackSessionIdRef.current) return;
+
+      if (data.type === HlsClass.ErrorTypes.MEDIA_ERROR) {
+        console.warn(`[HLS Engine] Media error detected (${data.details}, fatal: ${data.fatal}). Attempting recoverMediaError...`);
+        try {
+          hls.recoverMediaError();
+        } catch (e) {
+          console.error('[HLS Engine] recoverMediaError failed, starting reconnect engine:', e);
+          startReconnectEngine(HlsClass, 'media_error_recover_failed');
+        }
+      } else if (data.type === HlsClass.ErrorTypes.NETWORK_ERROR || data.fatal) {
+        console.warn(`[HLS Engine] Network or fatal error detected (${data.type}, ${data.details}). Starting reconnect engine...`);
+        startReconnectEngine(HlsClass, 'network_or_fatal_error');
+      }
+    });
+
+    const handleVideoCanPlay = () => {
+      resetStateAfterPlayback();
+      if (video.paused && stream.status === 'live') {
+        safePlayVideo(video);
+      }
+    };
+
+    const handleVideoErrorOrStall = (e: any) => {
+      if (sessionId !== playbackSessionIdRef.current) return;
+      if (isPollingRef.current) {
+        console.log('[RECONNECT] Video stall/error ignored because polling is already active.');
+        return;
+      }
+      console.warn(`[HLS Engine] Video stalled or error (${e?.type}). Triggering reconnect engine...`);
+      startReconnectEngine(HlsClass, `video_${e?.type || 'stall_or_error'}`);
+    };
+
+    const listeners = [
+      { type: 'canplay', fn: handleVideoCanPlay },
+      { type: 'loadeddata', fn: handleVideoCanPlay },
+      { type: 'ended', fn: handleVideoErrorOrStall },
+      { type: 'stalled', fn: handleVideoErrorOrStall },
+      { type: 'error', fn: handleVideoErrorOrStall },
+    ];
+
+    videoListenersRef.current = listeners;
+    listeners.forEach(({ type, fn }) => video.addEventListener(type, fn));
   };
 
   // Interactive Player Lifecycle effect (instantiates Hls.js or Dash.js on the <video> target)
   useEffect(() => {
     if (!isPlaying || !videoRef.current || stream.status !== 'live') return;
 
-    let active = true;
-
-    const startReconnectEngine = (HlsClass: any) => {
-      if (!active) {
-        console.log(`[RECONNECT] active flag is false, skipping. (isRecovering=${isRecoveringRef.current}, isPolling=${isPollingRef.current})`);
-        return;
-      }
-
-      if (isPollingRef.current) {
-        console.log(`[RECONNECT] Already reconnecting/polling (isPollingRef=true, isRecoveringRef=${isRecoveringRef.current}), skipping duplicate call.`);
-        return;
-      }
-
-      isPollingRef.current = true;
-      isRecoveringRef.current = true;
-      setIsReconnectingUI(true);
-
-      console.log('[RECONNECT] started');
-
-      if (reconnectTimerRef.current) {
-        clearInterval(reconnectTimerRef.current);
-        reconnectTimerRef.current = null;
-      }
-
-      console.log('[RECONNECT] destroying old player');
-      cleanupHlsAndListeners();
-
-      const pollForManifest = async () => {
-        if (!active) {
-          console.log('[RECONNECT] active flag false during polling, stopping timer');
-          if (reconnectTimerRef.current) {
-            clearInterval(reconnectTimerRef.current);
-            reconnectTimerRef.current = null;
-          }
-          isPollingRef.current = false;
-          return;
-        }
-
-        console.log('[RECONNECT] polling');
-
-        try {
-          const freshManifestUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
-          const res = await fetch(freshManifestUrl, { method: 'GET', cache: 'no-store' });
-          if (res.ok) {
-            const text = await res.text();
-            if (text && text.includes('#EXTM3U')) {
-              console.log('[RECONNECT] manifest found');
-              if (reconnectTimerRef.current) {
-                clearInterval(reconnectTimerRef.current);
-                reconnectTimerRef.current = null;
-              }
-              isPollingRef.current = false;
-              createAndAttachHlsInstance(HlsClass, freshManifestUrl);
-            }
-          }
-        } catch (e) {
-          // Stream still offline/reconnecting, polling continues every 1s
-        }
-      };
-
-      reconnectTimerRef.current = setInterval(pollForManifest, 1000);
-    };
-
-    startReconnectEngineRef.current = startReconnectEngine;
-
-    const createAndAttachHlsInstance = (HlsClass: any, manifestUrl: string) => {
-      const video = videoRef.current;
-      if (!video || !active) {
-        console.log(`[RECONNECT] Cannot create instance: video present=${!!video}, active=${active}`);
-        return;
-      }
-
-      console.log('[RECONNECT] destroying old player');
-      cleanupHlsAndListeners();
-
-      console.log('[RECONNECT] creating new player');
-      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-
-      const hls = new HlsClass({
-        enableWorker: true,
-        lowLatencyMode: true,
-        maxBufferLength: isMobile ? 10 : 30,
-        maxMaxBufferLength: isMobile ? 20 : 60,
-        maxBufferSize: isMobile ? 30 * 1024 * 1024 : 60 * 1024 * 1024,
-        maxBufferHole: 0.5,
-        highBufferWatchdogPeriod: 2,
-        nudgeOffset: 0.1,
-        nudgeMaxRetry: 5,
-        liveSyncDurationCount: 3,
-        liveMaxLatencyDurationCount: 10,
-        capLevelToPlayerSize: isMobile,
-        manifestLoadingMaxRetry: 30,
-        manifestLoadingRetryDelay: 1000,
-        manifestLoadingMaxRetryTimeout: 60000,
-        levelLoadingMaxRetry: 30,
-        levelLoadingRetryDelay: 1000,
-        fragLoadingMaxRetry: 30,
-        fragLoadingRetryDelay: 1000,
-      });
-
-      hlsInstanceRef.current = hls;
-
-      console.log('[RECONNECT] media attached');
-      hls.attachMedia(video);
-      hls.loadSource(manifestUrl);
-
-      hls.on(HlsClass.Events.MANIFEST_PARSED, (event: any, data: any) => {
-        if (!active) return;
-        console.log('[RECONNECT] manifest parsed');
-        hls.currentLevel = -1;
-
-        if (isMobile && data.levels && data.levels.length > 1) {
-          const defaultMobileIdx = data.levels.findIndex((l: any) => l.height && l.height <= 720 && l.height >= 480);
-          if (defaultMobileIdx !== -1) {
-            hls.startLevel = defaultMobileIdx;
-          }
-        }
-
-        const levels = data.levels.map((l: any) => {
-          if (l.height && l.height > 0) return `${l.height}p`;
-          return 'Original';
-        });
-        const uniqueLevels = Array.from(new Set(levels));
-        setQualityLevels(['Auto', ...uniqueLevels]);
-
-        safePlayVideo(video);
-        console.log('[RECONNECT] playback started');
-      });
-
-      hls.on(HlsClass.Events.FRAG_BUFFERED, () => {
-        if (!active) return;
-        console.log('[RECONNECT] recovery complete');
-        resetReconnectState();
-        if (video.paused && stream.status === 'live') {
-          safePlayVideo(video);
-        }
-      });
-
-      hls.on(HlsClass.Events.ERROR, (event: any, data: any) => {
-        if (!active) return;
-
-        if (data.type === HlsClass.ErrorTypes.MEDIA_ERROR) {
-          console.warn(`[HLS Engine] Media error detected (${data.details}, fatal: ${data.fatal}). Attempting recoverMediaError...`);
-          try {
-            hls.recoverMediaError();
-          } catch (e) {
-            console.error('[HLS Engine] recoverMediaError failed, starting reconnect engine:', e);
-            startReconnectEngine(HlsClass);
-          }
-        } else if (data.type === HlsClass.ErrorTypes.NETWORK_ERROR || data.fatal) {
-          console.warn(`[HLS Engine] Network error or fatal error detected (${data.type}, ${data.details}). Starting reconnect engine...`);
-          startReconnectEngine(HlsClass);
-        }
-      });
-
-      const handleVideoCanPlay = () => {
-        if (!active) return;
-        console.log('[RECONNECT] recovery complete');
-        resetReconnectState();
-        if (video.paused && stream.status === 'live') {
-          safePlayVideo(video);
-        }
-      };
-
-      const handleVideoErrorOrStall = (e: any) => {
-        if (!active) return;
-        if (isPollingRef.current) {
-          console.log('[RECONNECT] Video element error/stall event ignored because polling is already active.');
-          return;
-        }
-        console.warn('[HLS Engine] Video element stalled or ended. Triggering reconnect engine...');
-        startReconnectEngine(HlsClass);
-      };
-
-      const listeners = [
-        { type: 'canplay', fn: handleVideoCanPlay },
-        { type: 'loadeddata', fn: handleVideoCanPlay },
-        { type: 'ended', fn: handleVideoErrorOrStall },
-        { type: 'stalled', fn: handleVideoErrorOrStall },
-        { type: 'error', fn: handleVideoErrorOrStall },
-      ];
-
-      videoListenersRef.current = listeners;
-      listeners.forEach(({ type, fn }) => video.addEventListener(type, fn));
-    };
+    playbackSessionIdRef.current += 1;
+    const currentSessionId = playbackSessionIdRef.current;
+    console.log(`[StreamPlayer Lifecycle Effect] Initializing player for session ${currentSessionId} (stream: "${stream.title}")...`);
 
     const initPlayer = async () => {
       const video = videoRef.current;
-      if (!video) return;
-
-      console.log(`[StreamPlayer Engine] Initializing player for stream "${stream.title}" (${hlsUrl})...`);
-
-      cleanupHlsAndListeners();
-
-      if (dashPlayerRef.current) {
-        try {
-          dashPlayerRef.current.destroy();
-        } catch (_) {}
-        dashPlayerRef.current = null;
-      }
+      if (!video || currentSessionId !== playbackSessionIdRef.current) return;
 
       video.muted = volume === 0;
       video.volume = volume / 100;
@@ -1452,46 +1454,35 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       if (playerProtocol === 'hls') {
         try {
           await loadScript('https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js', 'hls-js-cdn');
-          if (!active) return;
+          if (currentSessionId !== playbackSessionIdRef.current) return;
+
           const Hls = (window as any).Hls;
           if (Hls && Hls.isSupported()) {
             const initialManifestUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
-            createAndAttachHlsInstance(Hls, initialManifestUrl);
+            createAndAttachHlsInstance(Hls, initialManifestUrl, currentSessionId);
           } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
             const cacheBustUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
             video.src = cacheBustUrl;
             video.addEventListener('loadedmetadata', () => {
-              if (active) safePlayVideo(video);
+              if (currentSessionId === playbackSessionIdRef.current) safePlayVideo(video);
             });
-
-            const handleNativeError = () => {
-              if (!active) return;
-              setTimeout(() => {
-                video.src = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
-                video.load();
-                safePlayVideo(video);
-              }, 1500);
-            };
-
-            video.addEventListener('error', handleNativeError);
-            video.addEventListener('ended', handleNativeError);
           }
         } catch (err) {
-          console.error('[HLS Engine] HLS load error:', err);
+          console.error('[HLS Engine] HLS load script error:', err);
         }
       } else {
-        // MPEG-DASH Playback using dash.js
+        // DASH player branch
         try {
           await loadScript('https://cdn.jsdelivr.net/npm/dashjs@4.7.1/dist/dash.all.min.js', 'dash-js-cdn');
-          if (!active) return;
+          if (currentSessionId !== playbackSessionIdRef.current) return;
           const dashjs = (window as any).dashjs;
           if (dashjs) {
             const player = dashjs.MediaPlayer().create();
             player.initialize(video, dashUrl, true);
             dashPlayerRef.current = player;
-            
+
             player.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
-              if (!active) return;
+              if (currentSessionId !== playbackSessionIdRef.current) return;
               const tracks = player.getTracksFor('video');
               if (tracks && tracks.length > 0) {
                 const bitrates = player.getBitrateInfoListFor('video').map((b: any) => `${b.height}p`);
@@ -1501,7 +1492,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
             });
           }
         } catch (err) {
-          console.error('[DASH Engine] DASH load error:', err);
+          console.error('[DASH Engine] DASH load script error:', err);
         }
       }
     };
@@ -1509,73 +1500,58 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     initPlayer();
 
     return () => {
-      active = false;
-      resetReconnectState();
-      cleanupHlsAndListeners();
-      if (dashPlayerRef.current) {
-        try {
-          dashPlayerRef.current.destroy();
-        } catch (_) {}
-        dashPlayerRef.current = null;
-      }
+      console.log(`[StreamPlayer Lifecycle Effect Cleanup] Cleaning up player for session ${currentSessionId}...`);
+      cleanupAndResetPlayer(`lifecycle_effect_cleanup_session_${currentSessionId}`);
     };
-  }, [isPlaying, playerProtocol, hlsUrl, dashUrl, stream.status]);
+  }, [isPlaying, playerProtocol, hlsUrl, dashUrl]);
 
-  // Proactive Playback Auto-Resume & Continuity Watchdog
+  // Proactive Playback Auto-Resume, Watchdog, & Offline-to-Live Auto-Start Monitor
   useEffect(() => {
-    if (!isPlaying) return;
-
-    const watchdogTimer = setInterval(() => {
+    const watchdogTimer = setInterval(async () => {
       const video = videoRef.current;
-      if (!video) return;
 
-      // If stream is live and video is paused (and not currently recovering/polling), auto-resume
-      if (stream.status === 'live' && video.paused && !isRecoveringRef.current && !isPollingRef.current) {
-        console.log('[Stream Watchdog] Stream is live but player paused, auto-resuming playback...');
-        safePlayVideo(video);
-      }
+      if (stream.status === 'live' && isPlaying) {
+        if (!video) return;
 
-      // If video has errored during live status, recover
-      if (stream.status === 'live' && video.error && !isRecoveringRef.current && !isPollingRef.current) {
-        console.warn('[Stream Watchdog] Video element in error state during live stream, triggering reconnect...');
-        const Hls = (window as any).Hls;
-        if (Hls && Hls.isSupported() && startReconnectEngineRef.current) {
-          startReconnectEngineRef.current(Hls);
-        } else {
-          resetReconnectState();
-          cleanupHlsAndListeners();
+        // Auto-resume if stream is live but paused and not recovering/polling
+        if (video.paused && !isRecoveringRef.current && !isPollingRef.current) {
+          console.log('[Stream Watchdog] Stream live but player paused, auto-resuming...');
+          safePlayVideo(video);
+        }
+
+        // Trigger reconnect if video errored during live stream
+        if (video.error && !isRecoveringRef.current && !isPollingRef.current) {
+          console.warn('[Stream Watchdog] Video element in error state during live stream, triggering reconnect...');
+          const Hls = (window as any).Hls;
+          if (Hls && Hls.isSupported()) {
+            startReconnectEngine(Hls, 'watchdog_video_error');
+          } else {
+            cleanupAndResetPlayer('watchdog_video_error_unsupported_hls');
+          }
+        }
+      } else if (stream.status !== 'live') {
+        // Proactive Offline-to-Live Auto-Start Monitor
+        try {
+          const checkUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+          const res = await fetch(checkUrl, { method: 'GET', cache: 'no-store' });
+          if (res.ok) {
+            const text = await res.text();
+            if (text && text.includes('#EXTM3U')) {
+              console.log('[Stream Watchdog] Detected active live HLS playlist while offline, auto-triggering live state...');
+              setIsPlaying(true);
+              if (onGoLive) {
+                onGoLive();
+              }
+            }
+          }
+        } catch (e) {
+          // Stream still offline
         }
       }
     }, 1500);
 
     return () => clearInterval(watchdogTimer);
-  }, [isPlaying, stream.status, hlsUrl]);
-
-  // Proactive Offline-to-Live Auto-Start Monitor
-  useEffect(() => {
-    if (stream.status === 'live') return;
-
-    const pollTimer = setInterval(async () => {
-      try {
-        const checkUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
-        const res = await fetch(checkUrl, { method: 'GET', cache: 'no-store' });
-        if (res.ok) {
-          const text = await res.text();
-          if (text && text.includes('#EXTM3U')) {
-            console.log('[Stream Watchdog] Detected active live HLS playlist while offline, auto-triggering live state...');
-            setIsPlaying(true);
-            if (onGoLive) {
-              onGoLive();
-            }
-          }
-        }
-      } catch (e) {
-        // Stream still offline
-      }
-    }, 1200);
-
-    return () => clearInterval(pollTimer);
-  }, [stream.status, hlsUrl, onGoLive]);
+  }, [isPlaying, stream.status, hlsUrl, onGoLive]);
 
   // Adjust volume dynamically
   useEffect(() => {

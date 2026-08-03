@@ -35,11 +35,9 @@ cleanup() {
 
 trap 'cleanup' SIGTERM SIGINT SIGHUP SIGQUIT EXIT
 
-sleep 1
-
-# Detect audio stream presence
+# Detect audio stream presence with rapid 1s timeout (no sleep delay)
 HAS_AUDIO=0
-AUDIO_COUNT=$(ffprobe -v error -rw_timeout 3000000 -select_streams a -show_entries stream=codec_name -of csv=p=0 "$RTMP_INPUT" 2>/dev/null | grep -c "[a-zA-Z0-9]" || true)
+AUDIO_COUNT=$(ffprobe -v error -rw_timeout 1000000 -select_streams a -show_entries stream=codec_name -of csv=p=0 "$RTMP_INPUT" 2>/dev/null | grep -c "[a-zA-Z0-9]" || true)
 
 if [ "$AUDIO_COUNT" -gt 0 ]; then
     HAS_AUDIO=1
@@ -49,7 +47,7 @@ else
 fi
 
 # Query dynamic stream profile configuration from local API
-CONFIG_JSON=$(curl -sf --max-time 3 "http://127.0.0.1:3000/api/rtmp/transcode-config/${STREAM_KEY}" || echo "")
+CONFIG_JSON=$(curl -sf --max-time 1 "http://127.0.0.1:3000/api/rtmp/transcode-config/${STREAM_KEY}" || echo "")
 
 FFMPEG_CMD_FILE="/tmp/ffmpeg_cmd_${STREAM_KEY}.sh"
 
@@ -67,6 +65,7 @@ try {
 }
 
 const hasAudio = hasAudioStr === '1';
+const sessionTag = Date.now();
 
 // Fallback variants if server API unreachable
 let variants = [
@@ -161,11 +160,11 @@ variants.forEach((v, i) => {
 args.push(
   '-f', 'hls',
   '-hls_time', '2',
-  '-hls_list_size', '6',
-  '-hls_flags', 'delete_segments+independent_segments',
+  '-hls_list_size', '5',
+  '-hls_flags', 'delete_segments+omit_endlist+independent_segments+program_date_time+discont_start',
   '-hls_segment_type', 'mpegts',
   '-master_pl_name', 'master.m3u8',
-  '-hls_segment_filename', `"${hlsPath}/%v/file%03d.ts"`,
+  '-hls_segment_filename', `"${hlsPath}/%v/seg_${sessionTag}_%05d.ts"`,
   '-var_stream_map', `"${varStreamMapParts.join(' ')}"`,
   `"${hlsPath}/%v/index.m3u8"`
 );

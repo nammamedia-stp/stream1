@@ -806,27 +806,11 @@ rtmp {
         listen 1935; # Standard RTMP port
         chunk_size 4096;
 
-        # Fast connection health monitoring & instant disconnect cleanup (<2s recovery)
-        timeout 5s;
-        ping 3s;
-        ping_timeout 3s;
-        drop_idle_publisher on;
-        idle_streams off;
-
         # Primary Live Stream Ingest Application
         # OBS publishes to rtmp://server/ingest/<stream_key>
         application ingest {
             live on;
             record off;
-
-            # Stream synchronization and immediate keyframe delivery
-            wait_key on;
-            wait_video on;
-            interleave on;
-            publish_notify on;
-            play_restart on;
-            out_queue 4096;
-            out_subqueue 512;
 
             # Forward the incoming stream to the 'live' application for RTMP playback
             push rtmp://localhost/live;
@@ -840,28 +824,18 @@ rtmp {
         application live {
             live on;
             record off;
-
-            wait_key on;
-            wait_video on;
-            interleave on;
         }
 
         # Raw ingest application (optional, if you want direct playback without transcoding)
         application raw {
             live on;
             record off;
-            wait_key on;
-            wait_video on;
             
             # Enable HLS generation for raw input directly
             hls on;
             hls_path /var/www/hls/raw;
-            hls_fragment 2;
-            hls_playlist_length 10;
-            hls_cleanup on;
-            hls_continuous off;
-            hls_nested off;
-            hls_type live;
+            hls_fragment 3;
+            hls_playlist_length 60;
         }
     }
 }
@@ -952,20 +926,11 @@ http {
         location /hls/ {
             alias /var/www/hls/;
             
-            # Disable file caching to force fresh manifest reads on every request
-            open_file_cache off;
-            sendfile off;
-            tcp_nopush off;
-            tcp_nodelay on;
-
             # CORS headers to support multi-origin players (HLS.js, Video.js, Mobile browsers)
             add_header Access-Control-Allow-Origin * always;
             add_header Access-Control-Expose-Headers Content-Length,Content-Range always;
             add_header Access-Control-Allow-Methods 'GET, HEAD, OPTIONS' always;
             add_header Access-Control-Allow-Headers 'DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range' always;
-            add_header Cache-Control "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0" always;
-            add_header Pragma "no-cache" always;
-            add_header Expires "0" always;
 
             if (\$request_method = 'OPTIONS') {
                 add_header 'Access-Control-Allow-Origin' '*';
@@ -1010,27 +975,11 @@ rtmp {
         listen 1935; # Standard RTMP port
         chunk_size 4096;
 
-        # Fast connection health monitoring & instant disconnect cleanup (<2s recovery)
-        timeout 5s;
-        ping 3s;
-        ping_timeout 3s;
-        drop_idle_publisher on;
-        idle_streams off;
-
         # Primary Live Stream Ingest Application
         # OBS publishes to rtmp://server/ingest/<stream_key>
         application ingest {
             live on;
             record off;
-
-            # Stream synchronization and immediate keyframe delivery
-            wait_key on;
-            wait_video on;
-            interleave on;
-            publish_notify on;
-            play_restart on;
-            out_queue 4096;
-            out_subqueue 512;
 
             # Forward the incoming stream to the 'live' application for RTMP playback
             push rtmp://localhost/live;
@@ -1044,28 +993,18 @@ rtmp {
         application live {
             live on;
             record off;
-
-            wait_key on;
-            wait_video on;
-            interleave on;
         }
 
         # Raw ingest application (optional, if you want direct playback without transcoding)
         application raw {
             live on;
             record off;
-            wait_key on;
-            wait_video on;
             
             # Enable HLS generation for raw input directly
             hls on;
             hls_path /var/www/hls/raw;
-            hls_fragment 2;
-            hls_playlist_length 10;
-            hls_cleanup on;
-            hls_continuous off;
-            hls_nested off;
-            hls_type live;
+            hls_fragment 3;
+            hls_playlist_length 60;
         }
     }
 }
@@ -1129,20 +1068,11 @@ http {
         location /hls/ {
             alias /var/www/hls/;
             
-            # Disable file caching to force fresh manifest reads on every request
-            open_file_cache off;
-            sendfile off;
-            tcp_nopush off;
-            tcp_nodelay on;
-
             # CORS headers to support multi-origin players (HLS.js, Video.js, Mobile browsers)
             add_header Access-Control-Allow-Origin * always;
             add_header Access-Control-Expose-Headers Content-Length,Content-Range always;
             add_header Access-Control-Allow-Methods 'GET, HEAD, OPTIONS' always;
             add_header Access-Control-Allow-Headers 'DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range' always;
-            add_header Cache-Control "no-cache, no-store, must-revalidate, max-age=0, s-maxage=0" always;
-            add_header Pragma "no-cache" always;
-            add_header Expires "0" always;
 
             if (\$request_method = 'OPTIONS') {
                 add_header 'Access-Control-Allow-Origin' '*';

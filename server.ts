@@ -700,13 +700,15 @@ async function startServer() {
       }
 
       const sessionTag = Date.now();
+      if (!sessionTag || isNaN(sessionTag) || sessionTag <= 0) {
+        console.error(`[Streaming Engine] Invalid sessionTag generated: ${sessionTag}`);
+      }
       ffmpegArgs.push(
         '-f', 'hls',
         '-hls_time', String(segmentDuration),
         '-hls_list_size', '5',
-        '-hls_flags', 'delete_segments+omit_endlist+independent_segments+program_date_time+discont_start',
+        '-hls_flags', 'delete_segments+independent_segments',
         '-hls_start_number', '0',
-        '-master_pl_name', 'master.m3u8',
         '-hls_segment_filename', path.join(hlsDir, safeName, `seg_${sessionTag}_%05d.ts`),
         path.join(hlsDir, safeName, 'index.m3u8')
       );
@@ -724,6 +726,7 @@ async function startServer() {
     const hlsDir = path.resolve(`./data/hls/${streamKey}`);
     if (!fs.existsSync(hlsDir)) {
       fs.mkdirSync(hlsDir, { recursive: true });
+      console.log(`[Streaming Engine] Executed mkdir -p for main stream directory: ${hlsDir}`);
     }
 
     // Retrieve stream from database
@@ -774,6 +777,24 @@ async function startServer() {
     );
 
     console.log(`[Streaming Engine] Active transcode profiles for ${streamKey}:`, finalActiveProfiles.map(p => p.name));
+
+    // Ensure output subdirectories exist before FFmpeg starts and verify write permissions
+    finalActiveProfiles.forEach((p) => {
+      const safeName = p.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const subDir = path.join(hlsDir, safeName);
+      if (!fs.existsSync(subDir)) {
+        fs.mkdirSync(subDir, { recursive: true });
+        console.log(`[Streaming Engine] Executed mkdir -p for profile directory: ${subDir}`);
+      }
+      try {
+        const testFile = path.join(subDir, `.write_test_${Date.now()}`);
+        fs.writeFileSync(testFile, 'writable_check');
+        fs.unlinkSync(testFile);
+        console.log(`[Streaming Engine] Verified output directory is writable: ${subDir}`);
+      } catch (writeErr: any) {
+        console.error(`[Streaming Engine] Output directory write verification FAILED for ${subDir}:`, writeErr);
+      }
+    });
 
     // Write dynamic, valid master HLS playlist structure
     let masterContent = `#EXTM3U\n#EXT-X-VERSION:3\n`;
@@ -827,16 +848,6 @@ ${reps}    </AdaptationSet>
     try {
       fs.writeFileSync(path.join(hlsDir, 'master.m3u8'), masterContent);
       fs.writeFileSync(path.join(hlsDir, 'manifest.mpd'), dashContent);
-      
-      // Ensure subdirectories exist for each active profile (without pre-creating corrupt/dummy segment files)
-      finalActiveProfiles.forEach((p) => {
-        const safeName = p.name.toLowerCase().replace(/[^a-z0-9]/g, '');
-        const subDir = path.join(hlsDir, safeName);
-        if (!fs.existsSync(subDir)) {
-          fs.mkdirSync(subDir, { recursive: true });
-        }
-      });
-
       console.log(`[Streaming Engine] Dynamically generated fresh master HLS & MPEG-DASH manifests for streamKey: ${streamKey}`);
     } catch (err) {
       console.error(`[Streaming Engine] Failed to write initial HLS/DASH files:`, err);
@@ -860,12 +871,64 @@ ${reps}    </AdaptationSet>
         const rtmpInputUrl = `rtmp://127.0.0.1:${rtmpPort}/live/${streamKey}`;
         const ffmpegArgs = generateFfmpegArguments(finalActiveProfiles, hlsDir, rtmpInputUrl);
 
-        console.log(`[Streaming Engine] FFmpeg generated args: ffmpeg ${ffmpegArgs.join(' ')}`);
+        // Verification of the generated command prior to execution
+        const fullCmdStr = `ffmpeg ${ffmpegArgs.map(arg => arg.includes(' ') ? `"${arg}"` : arg).join(' ')}`;
+        console.log(`[Streaming Engine] [Command Verification] Executing FFmpeg command:\n${fullCmdStr}`);
 
-        const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
+        let ffmpegProcess: any;
+        try {
+          ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
+        } catch (spawnErr: any) {
+          console.error(`[Streaming Engine] Complete spawn() error for streamKey "${streamKey}":`, spawnErr);
+          return;
+        }
 
-        ffmpegProcess.on('close', (code) => {
-          console.log(`[Streaming Engine] FFmpeg transcode closed with code ${code}`);
+        const stderrBuffer: string[] = [];
+        const MAX_STDERR_LINES = 100;
+
+        // Capture stdout in real time
+        if (ffmpegProcess.stdout) {
+          ffmpegProcess.stdout.on('data', (data: Buffer | string) => {
+            const line = data.toString().trim();
+            if (line) {
+              console.log(`[FFmpeg STDOUT [${streamKey}]] ${line}`);
+            }
+          });
+        }
+
+        // Capture stderr in real time & store last 100 lines
+        if (ffmpegProcess.stderr) {
+          ffmpegProcess.stderr.on('data', (data: Buffer | string) => {
+            const str = data.toString();
+            const lines = str.split(/\r?\n/);
+            lines.forEach((l) => {
+              const trimmed = l.trim();
+              if (trimmed) {
+                console.error(`[FFmpeg STDERR [${streamKey}]] ${trimmed}`);
+                stderrBuffer.push(trimmed);
+                if (stderrBuffer.length > MAX_STDERR_LINES) {
+                  stderrBuffer.shift();
+                }
+              }
+            });
+          });
+        }
+
+        ffmpegProcess.on('error', (err: any) => {
+          console.error(`[Streaming Engine] FFmpeg process encountered spawn/execution error for streamKey "${streamKey}":`, err);
+        });
+
+        ffmpegProcess.on('close', (code: number | null, signal: string | null) => {
+          console.log(`[Streaming Engine] FFmpeg transcode process closed for streamKey "${streamKey}". Exit Code: ${code}, Signal: ${signal}`);
+          console.log(`[Streaming Engine] --- LAST ${stderrBuffer.length} LINES OF FFmpeg STDERR [${streamKey}] ---`);
+          if (stderrBuffer.length === 0) {
+            console.log(`[Streaming Engine] (No stderr output captured)`);
+          } else {
+            stderrBuffer.forEach((line, idx) => {
+              console.log(`[Stderr ${idx + 1}/${stderrBuffer.length}] ${line}`);
+            });
+          }
+          console.log(`[Streaming Engine] --- END OF FFmpeg STDERR LOG ---`);
         });
 
         activeFfProcesses.set(streamKey, ffmpegProcess);

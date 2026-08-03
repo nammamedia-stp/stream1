@@ -1160,8 +1160,12 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     }
   }, [stream.status]);
 
-  // Ref to track whether recovery polling is active
+  // Refs for tracking recovery and reconnect engine state across playback lifecycles
   const isRecoveringRef = useRef<boolean>(false);
+  const isPollingRef = useRef<boolean>(false);
+  const reconnectTimerRef = useRef<any>(null);
+  const videoListenersRef = useRef<Array<{ type: string; fn: any }>>([]);
+  const startReconnectEngineRef = useRef<any>(null);
 
   // Helper to safely execute play with muted fallback if browser blocks unmuted play (NEVER set volume state to 0)
   const safePlayVideo = async (video: HTMLVideoElement) => {
@@ -1199,64 +1203,87 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     }
   };
 
+  // Complete clean up helper for old player instance and video listeners
+  const cleanupHlsAndListeners = () => {
+    const video = videoRef.current;
+    if (video && videoListenersRef.current.length > 0) {
+      videoListenersRef.current.forEach(({ type, fn }) => {
+        try {
+          video.removeEventListener(type, fn);
+        } catch (_) {}
+      });
+      videoListenersRef.current = [];
+    }
+
+    if (hlsInstanceRef.current) {
+      try {
+        hlsInstanceRef.current.stopLoad();
+        hlsInstanceRef.current.detachMedia();
+        hlsInstanceRef.current.destroy();
+      } catch (_) {}
+      hlsInstanceRef.current = null;
+    }
+
+    if (video) {
+      resetVideoElement(video);
+    }
+  };
+
+  // Reset every recovery flag, timer, lock, and counter after successful reconnect or session stop
+  const resetReconnectState = () => {
+    isRecoveringRef.current = false;
+    isPollingRef.current = false;
+    setIsReconnectingUI(false);
+    if (reconnectTimerRef.current) {
+      clearInterval(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    console.log('[RECONNECT] state reset');
+  };
+
   // Interactive Player Lifecycle effect (instantiates Hls.js or Dash.js on the <video> target)
   useEffect(() => {
     if (!isPlaying || !videoRef.current || stream.status !== 'live') return;
 
     let active = true;
-    let reconnectTimer: any = null;
-    let videoListeners: Array<{ type: string; fn: any }> = [];
-
-    const cleanupHlsAndListeners = () => {
-      const video = videoRef.current;
-      if (video && videoListeners.length > 0) {
-        videoListeners.forEach(({ type, fn }) => {
-          try {
-            video.removeEventListener(type, fn);
-          } catch (_) {}
-        });
-        videoListeners = [];
-      }
-
-      if (hlsInstanceRef.current) {
-        try {
-          hlsInstanceRef.current.stopLoad();
-          hlsInstanceRef.current.detachMedia();
-          hlsInstanceRef.current.destroy();
-        } catch (_) {}
-        hlsInstanceRef.current = null;
-      }
-
-      if (video) {
-        resetVideoElement(video);
-      }
-    };
 
     const startReconnectEngine = (HlsClass: any) => {
-      if (!active) return;
-
-      console.log('[HLS Reconnect Engine] Stream interrupted or network error detected. Entering reconnect mode...');
-
-      // Stop any existing reconnect timer to prevent multiple timers
-      if (reconnectTimer) {
-        clearInterval(reconnectTimer);
-        reconnectTimer = null;
+      if (!active) {
+        console.log(`[RECONNECT] active flag is false, skipping. (isRecovering=${isRecoveringRef.current}, isPolling=${isPollingRef.current})`);
+        return;
       }
 
+      if (isPollingRef.current) {
+        console.log(`[RECONNECT] Already reconnecting/polling (isPollingRef=true, isRecoveringRef=${isRecoveringRef.current}), skipping duplicate call.`);
+        return;
+      }
+
+      isPollingRef.current = true;
       isRecoveringRef.current = true;
       setIsReconnectingUI(true);
 
-      // Completely destroy existing HLS instance, listeners, and reset video element
+      console.log('[RECONNECT] started');
+
+      if (reconnectTimerRef.current) {
+        clearInterval(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+
+      console.log('[RECONNECT] destroying old player');
       cleanupHlsAndListeners();
 
       const pollForManifest = async () => {
         if (!active) {
-          if (reconnectTimer) {
-            clearInterval(reconnectTimer);
-            reconnectTimer = null;
+          console.log('[RECONNECT] active flag false during polling, stopping timer');
+          if (reconnectTimerRef.current) {
+            clearInterval(reconnectTimerRef.current);
+            reconnectTimerRef.current = null;
           }
+          isPollingRef.current = false;
           return;
         }
+
+        console.log('[RECONNECT] polling');
 
         try {
           const freshManifestUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
@@ -1264,11 +1291,12 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
           if (res.ok) {
             const text = await res.text();
             if (text && text.includes('#EXTM3U')) {
-              console.log('[HLS Reconnect Engine] Active live playlist detected! Instantiating brand new Hls instance...');
-              if (reconnectTimer) {
-                clearInterval(reconnectTimer);
-                reconnectTimer = null;
+              console.log('[RECONNECT] manifest found');
+              if (reconnectTimerRef.current) {
+                clearInterval(reconnectTimerRef.current);
+                reconnectTimerRef.current = null;
               }
+              isPollingRef.current = false;
               createAndAttachHlsInstance(HlsClass, freshManifestUrl);
             }
           }
@@ -1277,16 +1305,22 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
         }
       };
 
-      reconnectTimer = setInterval(pollForManifest, 1000);
+      reconnectTimerRef.current = setInterval(pollForManifest, 1000);
     };
+
+    startReconnectEngineRef.current = startReconnectEngine;
 
     const createAndAttachHlsInstance = (HlsClass: any, manifestUrl: string) => {
       const video = videoRef.current;
-      if (!video || !active) return;
+      if (!video || !active) {
+        console.log(`[RECONNECT] Cannot create instance: video present=${!!video}, active=${active}`);
+        return;
+      }
 
-      // Clean up any stale player/listeners before attaching new one
+      console.log('[RECONNECT] destroying old player');
       cleanupHlsAndListeners();
 
+      console.log('[RECONNECT] creating new player');
       const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
       const hls = new HlsClass({
@@ -1313,9 +1347,13 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
       hlsInstanceRef.current = hls;
 
+      console.log('[RECONNECT] media attached');
+      hls.attachMedia(video);
+      hls.loadSource(manifestUrl);
+
       hls.on(HlsClass.Events.MANIFEST_PARSED, (event: any, data: any) => {
         if (!active) return;
-        console.log(`[HLS Engine] Manifest parsed successfully (${data.levels ? data.levels.length : 0} quality levels).`);
+        console.log('[RECONNECT] manifest parsed');
         hls.currentLevel = -1;
 
         if (isMobile && data.levels && data.levels.length > 1) {
@@ -1333,14 +1371,14 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
         setQualityLevels(['Auto', ...uniqueLevels]);
 
         safePlayVideo(video);
+        console.log('[RECONNECT] playback started');
       });
 
       hls.on(HlsClass.Events.FRAG_BUFFERED, () => {
         if (!active) return;
-        isRecoveringRef.current = false;
-        setIsReconnectingUI(false);
+        console.log('[RECONNECT] recovery complete');
+        resetReconnectState();
         if (video.paused && stream.status === 'live') {
-          console.log('[HLS Engine] First fragment buffered. Triggering auto-play...');
           safePlayVideo(video);
         }
       });
@@ -1364,31 +1402,33 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
       const handleVideoCanPlay = () => {
         if (!active) return;
-        isRecoveringRef.current = false;
-        setIsReconnectingUI(false);
+        console.log('[RECONNECT] recovery complete');
+        resetReconnectState();
         if (video.paused && stream.status === 'live') {
           safePlayVideo(video);
         }
       };
 
-      const handleVideoErrorOrStall = () => {
+      const handleVideoErrorOrStall = (e: any) => {
         if (!active) return;
+        if (isPollingRef.current) {
+          console.log('[RECONNECT] Video element error/stall event ignored because polling is already active.');
+          return;
+        }
         console.warn('[HLS Engine] Video element stalled or ended. Triggering reconnect engine...');
         startReconnectEngine(HlsClass);
       };
 
-      videoListeners = [
+      const listeners = [
         { type: 'canplay', fn: handleVideoCanPlay },
         { type: 'loadeddata', fn: handleVideoCanPlay },
         { type: 'ended', fn: handleVideoErrorOrStall },
+        { type: 'stalled', fn: handleVideoErrorOrStall },
         { type: 'error', fn: handleVideoErrorOrStall },
       ];
 
-      videoListeners.forEach(({ type, fn }) => video.addEventListener(type, fn));
-
-      console.log(`[HLS Engine] Attaching media and loading source: ${manifestUrl}`);
-      hls.attachMedia(video);
-      hls.loadSource(manifestUrl);
+      videoListenersRef.current = listeners;
+      listeners.forEach(({ type, fn }) => video.addEventListener(type, fn));
     };
 
     const initPlayer = async () => {
@@ -1470,11 +1510,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
     return () => {
       active = false;
-      isRecoveringRef.current = false;
-      if (reconnectTimer) {
-        clearInterval(reconnectTimer);
-        reconnectTimer = null;
-      }
+      resetReconnectState();
       cleanupHlsAndListeners();
       if (dashPlayerRef.current) {
         try {
@@ -1493,24 +1529,22 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       const video = videoRef.current;
       if (!video) return;
 
-      // If stream is live and video is paused (and not currently recovering), auto-resume
-      if (stream.status === 'live' && video.paused && !isRecoveringRef.current) {
+      // If stream is live and video is paused (and not currently recovering/polling), auto-resume
+      if (stream.status === 'live' && video.paused && !isRecoveringRef.current && !isPollingRef.current) {
         console.log('[Stream Watchdog] Stream is live but player paused, auto-resuming playback...');
         safePlayVideo(video);
       }
 
       // If video has errored during live status, recover
-      if (stream.status === 'live' && video.error && !isRecoveringRef.current) {
-        console.warn('[Stream Watchdog] Video element in error state during live stream, resetting player...');
-        if (hlsInstanceRef.current) {
-          try {
-            hlsInstanceRef.current.detachMedia();
-            hlsInstanceRef.current.destroy();
-          } catch (_) {}
-          hlsInstanceRef.current = null;
+      if (stream.status === 'live' && video.error && !isRecoveringRef.current && !isPollingRef.current) {
+        console.warn('[Stream Watchdog] Video element in error state during live stream, triggering reconnect...');
+        const Hls = (window as any).Hls;
+        if (Hls && Hls.isSupported() && startReconnectEngineRef.current) {
+          startReconnectEngineRef.current(Hls);
+        } else {
+          resetReconnectState();
+          cleanupHlsAndListeners();
         }
-        resetVideoElement(video);
-        isRecoveringRef.current = false;
       }
     }, 1500);
 

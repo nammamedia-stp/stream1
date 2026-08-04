@@ -1304,42 +1304,43 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     const hls = new HlsClass({
       enableWorker: true,
       lowLatencyMode: true,
-      maxBufferLength: isMobile ? 10 : 30,
-      maxMaxBufferLength: isMobile ? 20 : 60,
-      maxBufferSize: isMobile ? 30 * 1024 * 1024 : 60 * 1024 * 1024,
+      maxBufferLength: isMobile ? 10 : 25,
+      maxMaxBufferLength: isMobile ? 15 : 45,
+      maxBufferSize: isMobile ? 20 * 1024 * 1024 : 50 * 1024 * 1024,
       maxBufferHole: 0.5,
       highBufferWatchdogPeriod: 2,
       nudgeOffset: 0.1,
       nudgeMaxRetry: 5,
       liveSyncDurationCount: 3,
-      liveMaxLatencyDurationCount: 10,
+      liveMaxLatencyDurationCount: 8,
+      backBufferLength: 0,
+      startPosition: -1,
       capLevelToPlayerSize: isMobile,
-      manifestLoadingMaxRetry: 30,
+      // Retries & Timeouts: Shortened to detect disconnects/reconnects in <4s instead of 60s delay
+      manifestLoadingMaxRetry: 4,
       manifestLoadingRetryDelay: 1000,
-      manifestLoadingMaxRetryTimeout: 60000,
-      levelLoadingMaxRetry: 30,
+      manifestLoadingMaxRetryTimeout: 4000,
+      levelLoadingMaxRetry: 4,
       levelLoadingRetryDelay: 1000,
-      fragLoadingMaxRetry: 30,
+      levelLoadingMaxRetryTimeout: 4000,
+      fragLoadingMaxRetry: 4,
       fragLoadingRetryDelay: 1000,
+      fragLoadingMaxRetryTimeout: 4000,
     });
 
     hlsInstanceRef.current = hls;
 
     let autoplayTriggered = false;
 
-    // STEP 1: Attach Media to Video Element
-    console.log(`[StreamPlayer Engine] Attaching media to video element (sessionId: ${sessionId})...`);
-    hls.attachMedia(video);
-
-    // STEP 2: Wait for MEDIA_ATTACHED before loading source
+    // STEP 1: Register MEDIA_ATTACHED handler BEFORE calling attachMedia()
     hls.on(HlsClass.Events.MEDIA_ATTACHED, () => {
       if (sessionId !== playbackSessionIdRef.current) return;
       const freshManifestUrl = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
-      console.log(`[StreamPlayer Engine] MEDIA_ATTACHED confirmed. Loading fresh source: ${freshManifestUrl} (sessionId: ${sessionId})`);
+      console.log(`[StreamPlayer Engine] MEDIA_ATTACHED confirmed. Loading fresh source with cache-buster: ${freshManifestUrl} (sessionId: ${sessionId})`);
       hls.loadSource(freshManifestUrl);
     });
 
-    // STEP 3: Handle MANIFEST_PARSED
+    // STEP 2: Handle MANIFEST_PARSED
     hls.on(HlsClass.Events.MANIFEST_PARSED, (event: any, data: any) => {
       if (sessionId !== playbackSessionIdRef.current) return;
       console.log(`[StreamPlayer Engine] MANIFEST_PARSED (sessionId: ${sessionId})`);
@@ -1360,7 +1361,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       setQualityLevels(['Auto', ...uniqueLevels]);
     });
 
-    // STEP 4: Wait for first FRAG_BUFFERED before triggering autoplay
+    // STEP 3: Wait for first FRAG_BUFFERED before triggering autoplay
     hls.on(HlsClass.Events.FRAG_BUFFERED, () => {
       if (sessionId !== playbackSessionIdRef.current) return;
       
@@ -1378,23 +1379,37 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       }
     });
 
-    // STEP 5: Error Handling
+    // STEP 4: Handle Errors
     hls.on(HlsClass.Events.ERROR, (event: any, data: any) => {
       if (sessionId !== playbackSessionIdRef.current) return;
+      console.warn(`[HLS Engine] Error event (type: ${data.type}, details: ${data.details}, fatal: ${data.fatal})`);
 
-      if (data.type === HlsClass.ErrorTypes.MEDIA_ERROR) {
-        console.warn(`[HLS Engine] Media error detected (${data.details}, fatal: ${data.fatal}). Attempting recoverMediaError...`);
-        try {
-          hls.recoverMediaError();
-        } catch (e) {
-          console.error('[HLS Engine] recoverMediaError failed, starting reconnect engine:', e);
-          startReconnectEngine(HlsClass, 'media_error_recover_failed');
+      if (data.fatal) {
+        switch (data.type) {
+          case HlsClass.ErrorTypes.MEDIA_ERROR:
+            console.warn('[HLS Engine] Fatal media error detected. Attempting recoverMediaError...');
+            try {
+              hls.recoverMediaError();
+            } catch (e) {
+              console.error('[HLS Engine] recoverMediaError failed, starting reconnect engine:', e);
+              startReconnectEngine(HlsClass, 'fatal_media_error_recover_failed');
+            }
+            break;
+          case HlsClass.ErrorTypes.NETWORK_ERROR:
+            console.warn('[HLS Engine] Fatal network error detected. Starting reconnect engine...');
+            startReconnectEngine(HlsClass, 'fatal_network_error');
+            break;
+          default:
+            console.error('[HLS Engine] Unrecoverable fatal error. Starting reconnect engine...');
+            startReconnectEngine(HlsClass, `fatal_error_${data.details}`);
+            break;
         }
-      } else if (data.type === HlsClass.ErrorTypes.NETWORK_ERROR || data.fatal) {
-        console.warn(`[HLS Engine] Network or fatal error detected (${data.type}, ${data.details}). Starting reconnect engine...`);
-        startReconnectEngine(HlsClass, 'network_or_fatal_error');
       }
     });
+
+    // STEP 5: Attach Media to Video Element AFTER listeners are registered
+    console.log(`[StreamPlayer Engine] Attaching media to video element (sessionId: ${sessionId})...`);
+    hls.attachMedia(video);
 
     // Video Event Listeners
     const handleVideoCanPlay = () => {

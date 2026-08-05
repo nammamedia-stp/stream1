@@ -3392,6 +3392,12 @@ async function startServer() {
           viewers: 0
         });
 
+        // Clean up master playlist on disk so player receives 404 when stream goes offline
+        const localMaster = path.resolve(`./data/hls/${streamKey}/master.m3u8`);
+        const vpsMaster = `/var/www/hls/${streamKey}/master.m3u8`;
+        if (fs.existsSync(localMaster)) { try { fs.unlinkSync(localMaster); } catch (e) {} }
+        if (fs.existsSync(vpsMaster)) { try { fs.unlinkSync(vpsMaster); } catch (e) {} }
+
         const updatedOffline = await db.getStreamByKey(streamKey);
         const augmentedOffline = updatedOffline ? await augmentStreamWithPlayback(updatedOffline, req) : null;
 

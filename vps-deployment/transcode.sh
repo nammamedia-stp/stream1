@@ -22,8 +22,10 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] StreamPulse Production Transcoder Initiated
 
 FFMPEG_PID=""
 PID_FILE="/tmp/ffmpeg_${STREAM_KEY}.pid"
+FFMPEG_CMD_FILE="/tmp/ffmpeg_cmd_${STREAM_KEY}.sh"
 
 cleanup() {
+    trap - EXIT SIGTERM SIGINT SIGHUP SIGQUIT
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Termination signal received. Initiating cleanup..." >> "$LOG_FILE"
     if [ -n "$FFMPEG_PID" ]; then
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Sending SIGTERM to FFmpeg PID: $FFMPEG_PID" >> "$LOG_FILE"
@@ -31,6 +33,17 @@ cleanup() {
         wait "$FFMPEG_PID" 2>/dev/null || true
     fi
     rm -f "$PID_FILE" 2>/dev/null || true
+    rm -f "$FFMPEG_CMD_FILE" 2>/dev/null || true
+
+    # Mark variant playlists as ended and remove master playlist so players disconnect cleanly
+    if [ -d "$HLS_PATH" ]; then
+        for playlist in "$HLS_PATH"/*/index.m3u8; do
+            if [ -f "$playlist" ] && ! grep -q "#EXT-X-ENDLIST" "$playlist"; then
+                echo "#EXT-X-ENDLIST" >> "$playlist"
+            fi
+        done
+        rm -f "$HLS_PATH/master.m3u8" 2>/dev/null || true
+    fi
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Transcoding process for ${STREAM_KEY} stopped." >> "$LOG_FILE"
     exit 0
 }
@@ -41,10 +54,17 @@ trap 'cleanup' SIGTERM SIGINT SIGHUP SIGQUIT EXIT
 if [ -f "$PID_FILE" ]; then
     OLD_PID=$(cat "$PID_FILE" 2>/dev/null || echo "")
     if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-        if grep -q "ffmpeg" "/proc/$OLD_PID/cmdline" 2>/dev/null; then
+        if grep -q "ffmpeg" "/proc/$OLD_PID/cmdline" 2>/dev/null && grep -q "${STREAM_KEY}" "/proc/$OLD_PID/cmdline" 2>/dev/null; then
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] Gracefully stopping prior FFmpeg session (PID $OLD_PID) for stream key: ${STREAM_KEY}" >> "$LOG_FILE"
             kill -TERM "$OLD_PID" 2>/dev/null || true
-            wait "$OLD_PID" 2>/dev/null || true
+            timeout=50
+            while kill -0 "$OLD_PID" 2>/dev/null; do
+                sleep 0.1
+                timeout=$((timeout - 1))
+                if [ "$timeout" -le 0 ]; then
+                    break
+                fi
+            done
         fi
     fi
     rm -f "$PID_FILE" 2>/dev/null || true
@@ -116,11 +136,12 @@ if (variants.length === 1) {
 const filterComplex = filterParts.join(';\n ');
 
 const args = [
+  'exec',
   'ffmpeg',
   '-y',
   '-rw_timeout', '5000000',
-  '-analyzeduration', '1000000',
-  '-probesize', '1000000',
+  '-analyzeduration', '500000',
+  '-probesize', '500000',
   '-fflags', '+genpts+nobuffer',
   '-i', `"${rtmpInput}"`,
   '-filter_complex', `"${filterComplex}"`
@@ -184,7 +205,8 @@ FFMPEG_PID=$!
 echo "$FFMPEG_PID" > "$PID_FILE" 2>/dev/null || true
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] FFmpeg running with PID: $FFMPEG_PID" >> "$LOG_FILE"
-wait "$FFMPEG_PID"
+FFMPEG_EXIT=0
+wait "$FFMPEG_PID" || FFMPEG_EXIT=$?
 
 rm -f "$FFMPEG_CMD_FILE" 2>/dev/null || true
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Transcode process ended with exit code: $?" >> "$LOG_FILE"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Transcode process ended with exit code: ${FFMPEG_EXIT}" >> "$LOG_FILE"

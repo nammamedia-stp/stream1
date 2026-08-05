@@ -514,8 +514,8 @@ if [ "$ACTION_REQ_NEEDED" = true ]; then
         if [[ -t 0 ]]; then read -r RTMP_RESOLUTION; else RTMP_RESOLUTION="2"; fi
 
         if [[ "$RTMP_RESOLUTION" == "1" ]]; then
-            log_info "Killing process '$pname' (PID: $pid) on port 1935..."
-            kill -9 "$pid" || true
+            log_info "Stopping process '$pname' (PID: $pid) on port 1935..."
+            kill -TERM "$pid" || true
             sleep 1
             if [[ -n "$(get_port_process 1935)" ]]; then
                 log_error "Failed to release port 1935."
@@ -545,8 +545,8 @@ if [ "$ACTION_REQ_NEEDED" = true ]; then
         if [[ -t 0 ]]; then read -r PORT3000_RESOLUTION; else PORT3000_RESOLUTION="2"; fi
 
         if [[ "$PORT3000_RESOLUTION" == "1" ]]; then
-            log_info "Killing process '$pname' (PID: $pid) on port 3000..."
-            kill -9 "$pid" || true
+            log_info "Stopping process '$pname' (PID: $pid) on port 3000..."
+            kill -TERM "$pid" || true
             sleep 1
             if [[ -n "$(get_port_process 3000)" ]]; then
                 log_error "Failed to release port 3000."
@@ -803,14 +803,21 @@ events {
 # Unified RTMP Configuration
 rtmp {
     server {
-        listen 1935; # Standard RTMP port
+        listen 1935 so_keepalive=on; # Standard RTMP port with OS TCP keepalive
         chunk_size 4096;
+        ping 3s;
+        ping_timeout 3s;
 
         # Primary Live Stream Ingest Application
         # OBS publishes to rtmp://server/ingest/<stream_key>
         application ingest {
             live on;
             record off;
+
+            # Fast reconnect & cleanup optimization for dropped sockets
+            drop_idle_publisher 3s;
+            idle_streams off;
+            exec_kill_signal term;
 
             # Forward the incoming stream to the 'live' application for RTMP playback
             push rtmp://localhost/live;
@@ -992,14 +999,21 @@ events {
 # Unified RTMP Configuration
 rtmp {
     server {
-        listen 1935; # Standard RTMP port
+        listen 1935 so_keepalive=on; # Standard RTMP port with OS TCP keepalive
         chunk_size 4096;
+        ping 3s;
+        ping_timeout 3s;
 
         # Primary Live Stream Ingest Application
         # OBS publishes to rtmp://server/ingest/<stream_key>
         application ingest {
             live on;
             record off;
+
+            # Fast reconnect & cleanup optimization for dropped sockets
+            drop_idle_publisher 3s;
+            idle_streams off;
+            exec_kill_signal term;
 
             # Forward the incoming stream to the 'live' application for RTMP playback
             push rtmp://localhost/live;

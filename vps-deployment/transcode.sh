@@ -21,6 +21,7 @@ echo "==========================================================" >> "$LOG_FILE"
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] StreamPulse Production Transcoder Initiated for key: ${STREAM_KEY}" >> "$LOG_FILE"
 
 FFMPEG_PID=""
+PID_FILE="/tmp/ffmpeg_${STREAM_KEY}.pid"
 
 cleanup() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Termination signal received. Initiating cleanup..." >> "$LOG_FILE"
@@ -29,23 +30,24 @@ cleanup() {
         kill -TERM "$FFMPEG_PID" 2>/dev/null || true
         wait "$FFMPEG_PID" 2>/dev/null || true
     fi
+    rm -f "$PID_FILE" 2>/dev/null || true
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Transcoding process for ${STREAM_KEY} stopped." >> "$LOG_FILE"
     exit 0
 }
 
 trap 'cleanup' SIGTERM SIGINT SIGHUP SIGQUIT EXIT
 
-sleep 1
-
-# Detect audio stream presence
-HAS_AUDIO=0
-AUDIO_COUNT=$(ffprobe -v error -rw_timeout 3000000 -select_streams a -show_entries stream=codec_name -of csv=p=0 "$RTMP_INPUT" 2>/dev/null | grep -c "[a-zA-Z0-9]" || true)
-
-if [ "$AUDIO_COUNT" -gt 0 ]; then
-    HAS_AUDIO=1
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Audio track detected in input stream." >> "$LOG_FILE"
-else
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] No audio track detected. Proceeding with video-only transcode." >> "$LOG_FILE"
+# Graceful cleanup of any previous FFmpeg session for this specific stream key using its isolated PID file
+if [ -f "$PID_FILE" ]; then
+    OLD_PID=$(cat "$PID_FILE" 2>/dev/null || echo "")
+    if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
+        if grep -q "ffmpeg" "/proc/$OLD_PID/cmdline" 2>/dev/null; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Gracefully stopping prior FFmpeg session (PID $OLD_PID) for stream key: ${STREAM_KEY}" >> "$LOG_FILE"
+            kill -TERM "$OLD_PID" 2>/dev/null || true
+            wait "$OLD_PID" 2>/dev/null || true
+        fi
+    fi
+    rm -f "$PID_FILE" 2>/dev/null || true
 fi
 
 # Query dynamic stream profile configuration from local API
@@ -53,9 +55,9 @@ CONFIG_JSON=$(curl -sf --max-time 3 "http://127.0.0.1:3000/api/rtmp/transcode-co
 
 FFMPEG_CMD_FILE="/tmp/ffmpeg_cmd_${STREAM_KEY}.sh"
 
-node - "$CONFIG_JSON" "$RTMP_INPUT" "$HLS_PATH" "$HAS_AUDIO" "$FFMPEG_CMD_FILE" << 'EOF'
+node - "$CONFIG_JSON" "$RTMP_INPUT" "$HLS_PATH" "$FFMPEG_CMD_FILE" << 'EOF'
 const fs = require('fs');
-const [,, configJsonStr, rtmpInput, hlsPath, hasAudioStr, outputFile] = process.argv;
+const [,, configJsonStr, rtmpInput, hlsPath, outputFile] = process.argv;
 
 let config = null;
 try {
@@ -65,8 +67,6 @@ try {
 } catch (e) {
   console.error("Config parse error:", e);
 }
-
-const hasAudio = hasAudioStr === '1';
 
 // Fallback variants if server API unreachable
 let variants = [
@@ -119,6 +119,9 @@ const args = [
   'ffmpeg',
   '-y',
   '-rw_timeout', '5000000',
+  '-analyzeduration', '1000000',
+  '-probesize', '1000000',
+  '-fflags', '+genpts+nobuffer',
   '-i', `"${rtmpInput}"`,
   '-filter_complex', `"${filterComplex}"`
 ];
@@ -143,30 +146,26 @@ variants.forEach((v, i) => {
     `-sc_threshold:v:${i}`, '0'
   );
 
-  if (hasAudio) {
-    const ba = v.audioBitrate || '128k';
-    args.push(
-      '-map', '0:a:0?',
-      `-c:a:${i}`, 'aac',
-      `-b:a:${i}`, ba,
-      `-ac:a:${i}`, '2',
-      `-ar:a:${i}`, '44100'
-    );
-    varStreamMapParts.push(`v:${i},a:${i},name:${v.name}`);
-  } else {
-    varStreamMapParts.push(`v:${i},name:${v.name}`);
-  }
+  const ba = v.audioBitrate || '128k';
+  args.push(
+    '-map', '0:a:0?',
+    `-c:a:${i}`, 'aac',
+    `-b:a:${i}`, ba,
+    `-ac:a:${i}`, '2',
+    `-ar:a:${i}`, '44100'
+  );
+  varStreamMapParts.push(`v:${i},a:${i},name:${v.name}`);
 });
 
 args.push(
   '-f', 'hls',
   '-hls_time', '2',
   '-hls_list_size', '6',
-  '-hls_flags', 'delete_segments+independent_segments+omit_endlist+discont_start',
-  '-start_number', String(Math.floor(Date.now() / 1000)),
+  '-hls_flags', 'delete_segments+independent_segments+omit_endlist',
+  '-start_number', '1',
   '-hls_segment_type', 'mpegts',
   '-master_pl_name', 'master.m3u8',
-  '-hls_segment_filename', `"${hlsPath}/%v/file%03d.ts"`,
+  '-hls_segment_filename', `"${hlsPath}/%v/file%05d.ts"`,
   '-var_stream_map', `"${varStreamMapParts.join(' ')}"`,
   `"${hlsPath}/%v/index.m3u8"`
 );
@@ -182,6 +181,7 @@ echo "" >> "$LOG_FILE"
 
 bash "$FFMPEG_CMD_FILE" >> "$LOG_FILE" 2>&1 &
 FFMPEG_PID=$!
+echo "$FFMPEG_PID" > "$PID_FILE" 2>/dev/null || true
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] FFmpeg running with PID: $FFMPEG_PID" >> "$LOG_FILE"
 wait "$FFMPEG_PID"

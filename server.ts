@@ -708,7 +708,7 @@ async function startServer() {
         '-hls_time', String(segmentDuration),
         '-hls_list_size', '5',
         '-hls_flags', 'delete_segments+independent_segments',
-        '-hls_start_number', '0',
+        '-start_number', '0',
         '-hls_segment_filename', path.join(hlsDir, safeName, `seg_${sessionTag}_%05d.ts`),
         path.join(hlsDir, safeName, 'index.m3u8')
       );

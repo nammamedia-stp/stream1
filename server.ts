@@ -700,6 +700,7 @@ async function startServer() {
       }
 
       const sessionTag = Date.now();
+      const startSeqNum = Math.floor(Date.now() / 1000);
       if (!sessionTag || isNaN(sessionTag) || sessionTag <= 0) {
         console.error(`[Streaming Engine] Invalid sessionTag generated: ${sessionTag}`);
       }
@@ -707,8 +708,8 @@ async function startServer() {
         '-f', 'hls',
         '-hls_time', String(segmentDuration),
         '-hls_list_size', '5',
-        '-hls_flags', 'delete_segments+independent_segments',
-        '-start_number', '0',
+        '-hls_flags', 'delete_segments+independent_segments+omit_endlist+discont_start',
+        '-start_number', String(startSeqNum),
         '-hls_segment_filename', path.join(hlsDir, safeName, `seg_${sessionTag}_%05d.ts`),
         path.join(hlsDir, safeName, 'index.m3u8')
       );

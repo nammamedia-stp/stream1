@@ -162,41 +162,61 @@ async function startServer() {
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
-  // Serve HLS & DASH streams with proper CORS and cache headers
+  // Clean leftover HLS directories on server startup and reset active streams
   const hlsPath = path.resolve('./data/hls');
-  if (!fs.existsSync(hlsPath)) {
-    fs.mkdirSync(hlsPath, { recursive: true });
+  if (fs.existsSync(hlsPath)) {
+    try {
+      fs.rmSync(hlsPath, { recursive: true, force: true });
+    } catch (e) {
+      console.error('[Server Boot] Error clearing local HLS dir:', e);
+    }
+  }
+  fs.mkdirSync(hlsPath, { recursive: true });
+
+  const vpsHlsPath = '/var/www/hls';
+  if (fs.existsSync(vpsHlsPath)) {
+    try {
+      const files = fs.readdirSync(vpsHlsPath);
+      for (const file of files) {
+        fs.rmSync(path.join(vpsHlsPath, file), { recursive: true, force: true });
+      }
+    } catch (e) {
+      console.error('[Server Boot] Error clearing VPS HLS dir:', e);
+    }
+  }
+
+  try {
+    const initialStreams = await db.getStreams();
+    for (const s of initialStreams) {
+      if (s.status === 'live') {
+        await db.updateStream(s.id, { status: 'offline', viewers: 0 });
+      }
+    }
+    console.log('[Server Boot] Cleared leftover HLS directories & reset streams to offline state.');
+  } catch (e) {
+    console.error('[Server Boot] Error resetting streams on startup:', e);
   }
 
   const hlsStaticMiddleware = express.static(hlsPath, {
     etag: false,
     lastModified: false,
     setHeaders: (res, filePath) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0, s-maxage=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       if (filePath.endsWith('.m3u8')) {
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0, s-maxage=0');
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Expires', '0');
         res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
       } else if (filePath.endsWith('.ts')) {
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0, s-maxage=0');
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Expires', '0');
         res.setHeader('Content-Type', 'video/mp2t');
       } else if (filePath.endsWith('.m4s') || filePath.endsWith('.mp4')) {
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0, s-maxage=0');
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Expires', '0');
         res.setHeader('Content-Type', 'video/mp4');
       } else if (filePath.endsWith('.mpd')) {
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0, s-maxage=0');
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Expires', '0');
         res.setHeader('Content-Type', 'application/dash+xml');
       }
     }
   });
 
-  app.use('/hls', (req, res, next) => {
+  app.use('/hls', async (req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', '*');
@@ -204,9 +224,44 @@ async function startServer() {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0, s-maxage=0');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
+
     if (req.method === 'OPTIONS') {
       return res.sendStatus(204);
     }
+
+    const pathParts = req.path.split('/').filter(Boolean);
+    const streamKey = pathParts[0];
+
+    if (streamKey) {
+      try {
+        const stream = await db.getStreamByKey(streamKey);
+        // Requirement 3: Stream MUST be LIVE in DB to serve HLS
+        if (!stream || stream.status !== 'live') {
+          return res.status(404).send('Stream Offline');
+        }
+
+        // Requirement 5: Reject playlists older than 10 seconds
+        if (req.path.endsWith('.m3u8')) {
+          const localFilePath = path.join(hlsPath, req.path);
+          const vpsFilePath = path.join(vpsHlsPath, req.path);
+          const targetPath = fs.existsSync(localFilePath) ? localFilePath : (fs.existsSync(vpsFilePath) ? vpsFilePath : null);
+
+          if (!targetPath) {
+            return res.status(404).send('HLS Manifest Not Found');
+          }
+
+          const stats = fs.statSync(targetPath);
+          const ageMs = Date.now() - stats.mtimeMs;
+          if (ageMs > 10000) {
+            console.log(`[HLS Middleware] Rejecting stale playlist for key "${streamKey}" (age: ${(ageMs / 1000).toFixed(1)}s > 10s)`);
+            return res.status(404).send('HLS Playlist Stale');
+          }
+        }
+      } catch (e) {
+        console.error('[HLS Middleware Error]', e);
+      }
+    }
+
     next();
   }, hlsStaticMiddleware, (req, res) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0, s-maxage=0');
@@ -3392,11 +3447,19 @@ async function startServer() {
           viewers: 0
         });
 
-        // Clean up master playlist on disk so player receives 404 when stream goes offline
-        const localMaster = path.resolve(`./data/hls/${streamKey}/master.m3u8`);
-        const vpsMaster = `/var/www/hls/${streamKey}/master.m3u8`;
-        if (fs.existsSync(localMaster)) { try { fs.unlinkSync(localMaster); } catch (e) {} }
-        if (fs.existsSync(vpsMaster)) { try { fs.unlinkSync(vpsMaster); } catch (e) {} }
+        // 1. Notify active transcoding process via SIGTERM if running; transcode.sh handles graceful FFmpeg exit, PID file & HLS cleanup
+        const pidFile = `/tmp/ffmpeg_${streamKey}.pid`;
+        if (fs.existsSync(pidFile)) {
+          try {
+            const pidStr = fs.readFileSync(pidFile, 'utf-8').trim();
+            if (pidStr) {
+              const pid = parseInt(pidStr, 10);
+              if (!isNaN(pid) && pid > 0) {
+                try { process.kill(pid, 'SIGTERM'); } catch (_) {}
+              }
+            }
+          } catch (_) {}
+        }
 
         const updatedOffline = await db.getStreamByKey(streamKey);
         const augmentedOffline = updatedOffline ? await augmentStreamWithPlayback(updatedOffline, req) : null;

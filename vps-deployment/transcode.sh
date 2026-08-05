@@ -35,14 +35,9 @@ cleanup() {
     rm -f "$PID_FILE" 2>/dev/null || true
     rm -f "$FFMPEG_CMD_FILE" 2>/dev/null || true
 
-    # Mark variant playlists as ended and remove master playlist so players disconnect cleanly
+    # Clean up HLS output directory completely so no stale playlists or TS segments remain
     if [ -d "$HLS_PATH" ]; then
-        for playlist in "$HLS_PATH"/*/index.m3u8; do
-            if [ -f "$playlist" ] && ! grep -q "#EXT-X-ENDLIST" "$playlist"; then
-                echo "#EXT-X-ENDLIST" >> "$playlist"
-            fi
-        done
-        rm -f "$HLS_PATH/master.m3u8" 2>/dev/null || true
+        rm -rf "$HLS_PATH" 2>/dev/null || true
     fi
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Transcoding process for ${STREAM_KEY} stopped." >> "$LOG_FILE"
     exit 0

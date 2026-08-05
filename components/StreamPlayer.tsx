@@ -1316,6 +1316,11 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       backBufferLength: 0,
       startPosition: -1,
       capLevelToPlayerSize: isMobile,
+      xhrSetup: (xhr: XMLHttpRequest) => {
+        xhr.setRequestHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        xhr.setRequestHeader('Pragma', 'no-cache');
+        xhr.setRequestHeader('Expires', '0');
+      },
       // Retries & Timeouts: Shortened retry delay to 500ms for rapid initial stream discovery
       manifestLoadingMaxRetry: 6,
       manifestLoadingRetryDelay: 500,
@@ -1457,6 +1462,23 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
           const Hls = (window as any).Hls;
           if (Hls && Hls.isSupported()) {
+            const cacheBustUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+            try {
+              const checkRes = await fetch(cacheBustUrl, { method: 'GET', cache: 'no-store' });
+              if (!checkRes.ok) {
+                console.warn(`[StreamPlayer Engine] Manifest check returned HTTP ${checkRes.status}, stream is offline.`);
+                cleanupAndResetPlayer('manifest_fetch_failed');
+                setIsPlaying(false);
+                return;
+              }
+            } catch (err) {
+              console.warn('[StreamPlayer Engine] Manifest check network error, stream is offline.');
+              cleanupAndResetPlayer('manifest_network_error');
+              setIsPlaying(false);
+              return;
+            }
+
+            if (currentSessionId !== playbackSessionIdRef.current) return;
             createAndAttachHlsInstance(Hls, hlsUrl, currentSessionId);
           } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
             const cacheBustUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;

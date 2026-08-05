@@ -50,16 +50,23 @@ if [ -f "$PID_FILE" ]; then
     OLD_PID=$(cat "$PID_FILE" 2>/dev/null || echo "")
     if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
         if grep -q "ffmpeg" "/proc/$OLD_PID/cmdline" 2>/dev/null && grep -q "${STREAM_KEY}" "/proc/$OLD_PID/cmdline" 2>/dev/null; then
-            echo "[$(date '+%Y-%m-%d %H:%M:%S')] Gracefully stopping prior FFmpeg session (PID $OLD_PID) for stream key: ${STREAM_KEY}" >> "$LOG_FILE"
-            kill -TERM "$OLD_PID" 2>/dev/null || true
-            timeout=50
-            while kill -0 "$OLD_PID" 2>/dev/null; do
-                sleep 0.1
-                timeout=$((timeout - 1))
-                if [ "$timeout" -le 0 ]; then
-                    break
-                fi
-            done
+            STATE=$(awk '{print $3}' "/proc/$OLD_PID/stat" 2>/dev/null || echo "")
+            if [ "$STATE" != "Z" ]; then
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] Gracefully stopping prior FFmpeg session (PID $OLD_PID) for stream key: ${STREAM_KEY}" >> "$LOG_FILE"
+                kill -TERM "$OLD_PID" 2>/dev/null || true
+                timeout=50
+                while kill -0 "$OLD_PID" 2>/dev/null; do
+                    STATE=$(awk '{print $3}' "/proc/$OLD_PID/stat" 2>/dev/null || echo "")
+                    if [ "$STATE" = "Z" ]; then
+                        break
+                    fi
+                    sleep 0.1
+                    timeout=$((timeout - 1))
+                    if [ "$timeout" -le 0 ]; then
+                        break
+                    fi
+                done
+            fi
         fi
     fi
     rm -f "$PID_FILE" 2>/dev/null || true

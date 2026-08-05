@@ -3447,7 +3447,7 @@ async function startServer() {
           viewers: 0
         });
 
-        // 1. Notify active transcoding process via SIGTERM if running; transcode.sh handles graceful FFmpeg exit, PID file & HLS cleanup
+        // 1. Notify active transcoding process via SIGTERM if running
         const pidFile = `/tmp/ffmpeg_${streamKey}.pid`;
         if (fs.existsSync(pidFile)) {
           try {
@@ -3460,6 +3460,12 @@ async function startServer() {
             }
           } catch (_) {}
         }
+
+        // 2. Remove all HLS assets for that stream key immediately
+        const localStreamDir = path.resolve(`./data/hls/${streamKey}`);
+        const vpsStreamDir = `/var/www/hls/${streamKey}`;
+        if (fs.existsSync(localStreamDir)) { try { fs.rmSync(localStreamDir, { recursive: true, force: true }); } catch (e) {} }
+        if (fs.existsSync(vpsStreamDir)) { try { fs.rmSync(vpsStreamDir, { recursive: true, force: true }); } catch (e) {} }
 
         const updatedOffline = await db.getStreamByKey(streamKey);
         const augmentedOffline = updatedOffline ? await augmentStreamWithPlayback(updatedOffline, req) : null;

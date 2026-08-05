@@ -1364,6 +1364,29 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       });
       const uniqueLevels = Array.from(new Set(levels));
       setQualityLevels(['Auto', ...uniqueLevels]);
+
+      // Requirement 4: On MANIFEST_PARSED, automatically call safePlayVideo(video)
+      if (video && video.paused) {
+        console.log(`[StreamPlayer Engine] MANIFEST_PARSED triggering safePlayVideo (sessionId: ${sessionId})...`);
+        safePlayVideo(video);
+      }
+    });
+
+    // Requirement 4: On LEVEL_LOADED & BUFFER_APPENDED, auto-resume if paused unexpectedly while stream is LIVE
+    hls.on(HlsClass.Events.LEVEL_LOADED, () => {
+      if (sessionId !== playbackSessionIdRef.current) return;
+      if (video && video.paused && stream.status === 'live' && !isPollingRef.current) {
+        console.log(`[StreamPlayer Engine] LEVEL_LOADED auto-resuming paused video (sessionId: ${sessionId})...`);
+        safePlayVideo(video);
+      }
+    });
+
+    hls.on(HlsClass.Events.BUFFER_APPENDED, () => {
+      if (sessionId !== playbackSessionIdRef.current) return;
+      if (video && video.paused && stream.status === 'live' && !isPollingRef.current) {
+        console.log(`[StreamPlayer Engine] BUFFER_APPENDED auto-resuming paused video (sessionId: ${sessionId})...`);
+        safePlayVideo(video);
+      }
     });
 
     // STEP 3: Wait for first FRAG_BUFFERED before triggering autoplay

@@ -1239,12 +1239,11 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     }
 
     console.log(`[StreamPlayer Reconnect] Started reconnect engine (reason: ${reason})`);
+    cleanupAndResetPlayer(`reconnect_start_${reason}`);
+
     isPollingRef.current = true;
     setIsReconnectingUI(true);
 
-    cleanupAndResetPlayer(`reconnect_start_${reason}`);
-
-    playbackSessionIdRef.current += 1;
     const sessionForReconnect = playbackSessionIdRef.current;
 
     const pollForManifest = async () => {
@@ -1489,15 +1488,15 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
             try {
               const checkRes = await fetch(cacheBustUrl, { method: 'GET', cache: 'no-store' });
               if (!checkRes.ok) {
-                console.warn(`[StreamPlayer Engine] Manifest check returned HTTP ${checkRes.status}, stream is offline.`);
-                cleanupAndResetPlayer('manifest_fetch_failed');
-                setIsPlaying(false);
+                console.warn(`[StreamPlayer Engine] Manifest check returned HTTP ${checkRes.status}, stream is starting up/reconnecting. Starting reconnect engine...`);
+                cleanupAndResetPlayer('manifest_fetch_pending');
+                startReconnectEngine(Hls, 'manifest_check_404');
                 return;
               }
             } catch (err) {
-              console.warn('[StreamPlayer Engine] Manifest check network error, stream is offline.');
-              cleanupAndResetPlayer('manifest_network_error');
-              setIsPlaying(false);
+              console.warn('[StreamPlayer Engine] Manifest check network error, starting reconnect engine...');
+              cleanupAndResetPlayer('manifest_network_pending');
+              startReconnectEngine(Hls, 'manifest_check_network_error');
               return;
             }
 

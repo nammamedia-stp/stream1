@@ -35,10 +35,7 @@ cleanup() {
     rm -f "$PID_FILE" 2>/dev/null || true
     rm -f "$FFMPEG_CMD_FILE" 2>/dev/null || true
 
-    # Clean up HLS output directory completely so no stale playlists or TS segments remain
-    if [ -d "$HLS_PATH" ]; then
-        rm -rf "$HLS_PATH" 2>/dev/null || true
-    fi
+    # HLS output directory cleanup is safely managed by StreamPulse server with a 60s grace period for encoder reconnects.
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Transcoding process for ${STREAM_KEY} stopped." >> "$LOG_FILE"
     exit 0
 }
@@ -152,31 +149,55 @@ const args = [
 let varStreamMapParts = [];
 
 variants.forEach((v, i) => {
+  const isCopy = v.isOriginal || v.videoCodec === 'copy' || v.name === 'Original' || v.name === 'Source (Original)';
   const preset = v.encoderPreset || 'superfast';
-  const bv = v.bitrate || '2500k';
-  const maxrate = v.maxBitrate || '2700k';
-  const bufsize = v.bufferSize || '4000k';
 
-  args.push(
-    '-map', `"[v${i}]"`,
-    `-c:v:${i}`, 'libx264',
-    `-preset:v:${i}`, preset,
-    `-b:v:${i}`, bv,
-    `-maxrate:v:${i}`, maxrate,
-    `-bufsize:v:${i}`, bufsize,
-    `-g:v:${i}`, '60',
-    `-keyint_min:v:${i}`, '60',
-    `-sc_threshold:v:${i}`, '0'
-  );
+  let bv = v.bitrate;
+  if (!bv || bv === '0k' || bv === '0') {
+    bv = isCopy ? '0k' : '2500k';
+  }
+  let maxrate = v.maxBitrate;
+  if (!maxrate || maxrate === '0k' || maxrate === '0') {
+    maxrate = isCopy ? '0k' : '2875k';
+  }
+  let bufsize = v.bufferSize;
+  if (!bufsize || bufsize === '0k' || bufsize === '0') {
+    bufsize = isCopy ? '0k' : '4000k';
+  }
+  let ba = v.audioBitrate;
+  if (!ba || ba === '0k' || ba === '0') {
+    ba = isCopy ? '0k' : '128k';
+  }
 
-  const ba = v.audioBitrate || '128k';
-  args.push(
-    '-map', '0:a:0?',
-    `-c:a:${i}`, 'aac',
-    `-b:a:${i}`, ba,
-    `-ac:a:${i}`, '2',
-    `-ar:a:${i}`, '44100'
-  );
+  if (isCopy) {
+    args.push(
+      '-map', `"[v${i}]"`,
+      `-c:v:${i}`, 'copy',
+      '-map', '0:a:0?',
+      `-c:a:${i}`, 'copy'
+    );
+  } else {
+    args.push(
+      '-map', `"[v${i}]"`,
+      `-c:v:${i}`, 'libx264',
+      `-preset:v:${i}`, preset,
+      `-profile:v:${i}`, 'main',
+      `-level:v:${i}`, '4.1',
+      `-pix_fmt:v:${i}`, 'yuv420p',
+      `-b:v:${i}`, bv,
+      `-maxrate:v:${i}`, maxrate,
+      `-bufsize:v:${i}`, bufsize,
+      `-g:v:${i}`, '60',
+      `-keyint_min:v:${i}`, '60',
+      `-sc_threshold:v:${i}`, '0',
+      `-bsf:v:${i}`, 'h264_mp4toannexb',
+      '-map', '0:a:0?',
+      `-c:a:${i}`, 'aac',
+      `-b:a:${i}`, ba,
+      `-ac:a:${i}`, '2',
+      `-ar:a:${i}`, '44100'
+    );
+  }
   varStreamMapParts.push(`v:${i},a:${i},name:${v.name}`);
 });
 
@@ -184,7 +205,7 @@ args.push(
   '-f', 'hls',
   '-hls_time', '2',
   '-hls_list_size', '6',
-  '-hls_flags', 'delete_segments+independent_segments+omit_endlist',
+  '-hls_flags', 'delete_segments+independent_segments+omit_endlist+append_list+discont_start',
   '-start_number', '1',
   '-hls_segment_type', 'mpegts',
   '-master_pl_name', 'master.m3u8',

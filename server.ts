@@ -653,26 +653,33 @@ async function startServer() {
                        p.videoCodec === 'AV1' || p.videoCodec === 'libsvtav1' ? 'libsvtav1' : 'libx264';
         ffmpegArgs.push('-c:v', vcodec);
         
-        const vBitrate = String(p.bitrate).endsWith('k') ? p.bitrate : `${p.bitrate}k`;
+        const rawVBit = Number(p.bitrate) || 0;
+        const vBitrate = rawVBit > 0 ? (String(p.bitrate).endsWith('k') ? p.bitrate : `${p.bitrate}k`) : '2500k';
         ffmpegArgs.push('-b:v', vBitrate);
         
         const preset = p.encoderPreset || p.preset || 'superfast';
         ffmpegArgs.push('-preset', preset);
 
-        if (p.profile && vcodec !== 'libsvtav1') {
+        if (vcodec === 'libx264') {
           ffmpegArgs.push('-profile:v', p.profile || 'main');
-        }
-        if (p.pixelFormat) {
+          ffmpegArgs.push('-level', '4.1');
           ffmpegArgs.push('-pix_fmt', p.pixelFormat || 'yuv420p');
+        } else {
+          if (p.profile && vcodec !== 'libsvtav1') {
+            ffmpegArgs.push('-profile:v', p.profile || 'main');
+          }
+          if (p.pixelFormat) {
+            ffmpegArgs.push('-pix_fmt', p.pixelFormat || 'yuv420p');
+          }
         }
         
         const gop = p.gopSize || p.keyframeInterval || (p.fps || 30) * segmentDuration;
         ffmpegArgs.push('-g', String(gop), '-keyint_min', String(gop), '-sc_threshold', '0');
 
-        if (p.maxBitrate) {
+        if (p.maxBitrate && Number(p.maxBitrate) > 0) {
           ffmpegArgs.push('-maxrate', `${p.maxBitrate}k`);
         }
-        if (p.bufferSize) {
+        if (p.bufferSize && Number(p.bufferSize) > 0) {
           ffmpegArgs.push('-bufsize', `${p.bufferSize}k`);
         }
 
@@ -683,7 +690,8 @@ async function startServer() {
                          p.audioCodec === 'mp3' || p.audioCodec === 'libmp3lame' ? 'libmp3lame' : 'aac';
           ffmpegArgs.push('-c:a', acodec);
           
-          const aBitrate = String(p.audioBitrate).endsWith('k') ? p.audioBitrate : `${p.audioBitrate}k`;
+          const rawABit = Number(p.audioBitrate) || 0;
+          const aBitrate = rawABit > 0 ? (String(p.audioBitrate).endsWith('k') ? p.audioBitrate : `${p.audioBitrate}k`) : '128k';
           ffmpegArgs.push('-b:a', aBitrate);
           
           if (p.audioSampleRate) {
@@ -722,7 +730,7 @@ async function startServer() {
         '-f', 'hls',
         '-hls_time', String(segmentDuration),
         '-hls_list_size', '5',
-        '-hls_flags', 'delete_segments+independent_segments+omit_endlist+discont_start',
+        '-hls_flags', 'delete_segments+independent_segments+omit_endlist+append_list+discont_start',
         '-start_number', String(startSeqNum),
         '-hls_segment_filename', path.join(hlsDir, safeName, `seg_${sessionTag}_%05d.ts`),
         path.join(hlsDir, safeName, 'index.m3u8')
@@ -2847,17 +2855,25 @@ async function startServer() {
         title: stream.title,
         resolution: stream.resolution,
         enabledProfiles: stream.enabledProfiles,
-        variants: activeProfiles.map(p => ({
-          name: p.name,
-          width: p.width,
-          height: p.height,
-          bitrate: `${p.bitrate}k`,
-          maxBitrate: `${p.maxBitrate || Math.round(p.bitrate * 1.15)}k`,
-          bufferSize: `${p.bufferSize || Math.round(p.bitrate * 1.6)}k`,
-          audioBitrate: `${p.audioBitrate}k`,
-          fps: p.fps || 30,
-          encoderPreset: p.encoderPreset || 'superfast'
-        }))
+        variants: activeProfiles.map(p => {
+          const isCopy = p.videoCodec === 'copy' || p.resolutionType === 'Original' || p.name === 'Original';
+          const vBit = Number(p.bitrate) || 0;
+          const aBit = Number(p.audioBitrate) || 0;
+          return {
+            name: p.name,
+            width: p.width,
+            height: p.height,
+            isOriginal: isCopy,
+            videoCodec: p.videoCodec || (isCopy ? 'copy' : 'H.264'),
+            audioCodec: p.audioCodec || (isCopy ? 'copy' : 'aac'),
+            bitrate: isCopy ? '0k' : (vBit > 0 ? `${vBit}k` : '2500k'),
+            maxBitrate: isCopy ? '0k' : `${p.maxBitrate || Math.round((vBit || 2500) * 1.15)}k`,
+            bufferSize: isCopy ? '0k' : `${p.bufferSize || Math.round((vBit || 2500) * 1.6)}k`,
+            audioBitrate: isCopy ? '0k' : (aBit > 0 ? `${aBit}k` : '128k'),
+            fps: p.fps || 30,
+            encoderPreset: p.encoderPreset || 'superfast'
+          };
+        })
       });
     } catch (err: any) {
       console.error('[Transcode Config API] Error:', err);
@@ -3350,6 +3366,7 @@ async function startServer() {
 
   // Track active RTMP client connection IDs to prevent stale publish_done race conditions on reconnect
   const activeStreamClients = new Map<string, string | number>();
+  const pendingCleanups = new Map<string, NodeJS.Timeout>();
 
   // RTMP Ingest Validation HTTP Callback
   app.post('/api/rtmp/publish', async (req, res) => {
@@ -3361,6 +3378,12 @@ async function startServer() {
     if (!streamKey) {
       console.error(`[RTMP Publish Callback] Missing Stream Key`);
       return res.status(400).send('Missing Stream Key');
+    }
+
+    if (pendingCleanups.has(streamKey)) {
+      console.log(`[RTMP Publish Callback] Reconnect detected for stream key "${streamKey}". Cancelling pending HLS directory cleanup.`);
+      clearTimeout(pendingCleanups.get(streamKey)!);
+      pendingCleanups.delete(streamKey);
     }
 
     if (clientId) {
@@ -3461,11 +3484,20 @@ async function startServer() {
           } catch (_) {}
         }
 
-        // 2. Remove all HLS assets for that stream key immediately
-        const localStreamDir = path.resolve(`./data/hls/${streamKey}`);
-        const vpsStreamDir = `/var/www/hls/${streamKey}`;
-        if (fs.existsSync(localStreamDir)) { try { fs.rmSync(localStreamDir, { recursive: true, force: true }); } catch (e) {} }
-        if (fs.existsSync(vpsStreamDir)) { try { fs.rmSync(vpsStreamDir, { recursive: true, force: true }); } catch (e) {} }
+        // 2. Schedule delayed cleanup (60s grace period) for HLS assets to allow encoder reconnects without HTTP 404s
+        if (pendingCleanups.has(streamKey)) {
+          clearTimeout(pendingCleanups.get(streamKey)!);
+        }
+        const GRACE_PERIOD_MS = 60000;
+        const timer = setTimeout(() => {
+          pendingCleanups.delete(streamKey);
+          console.log(`[RTMP Cleanup] Grace period expired for stream key "${streamKey}". Cleaning up HLS directories.`);
+          const localStreamDir = path.resolve(`./data/hls/${streamKey}`);
+          const vpsStreamDir = `/var/www/hls/${streamKey}`;
+          if (fs.existsSync(localStreamDir)) { try { fs.rmSync(localStreamDir, { recursive: true, force: true }); } catch (e) {} }
+          if (fs.existsSync(vpsStreamDir)) { try { fs.rmSync(vpsStreamDir, { recursive: true, force: true }); } catch (e) {} }
+        }, GRACE_PERIOD_MS);
+        pendingCleanups.set(streamKey, timer);
 
         const updatedOffline = await db.getStreamByKey(streamKey);
         const augmentedOffline = updatedOffline ? await augmentStreamWithPlayback(updatedOffline, req) : null;

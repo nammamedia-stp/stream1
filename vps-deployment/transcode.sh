@@ -8,7 +8,7 @@ set -euo pipefail
 
 STREAM_KEY=$1
 HLS_PATH="/var/www/hls/${STREAM_KEY}"
-RTMP_INPUT="rtmp://127.0.0.1:1935/ingest/${STREAM_KEY}"
+RTMP_INPUT="rtmp://127.0.0.1:1935/live/${STREAM_KEY}"
 LOG_FILE="/var/log/nginx/transcode_${STREAM_KEY}.log"
 
 if [ -z "$STREAM_KEY" ]; then

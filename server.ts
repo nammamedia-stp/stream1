@@ -1799,8 +1799,12 @@ async function startServer() {
   }
 
   // ----------------------------------------------------
-  // STREAM MANAGEMENT API ENDPOINTS
+  // HEALTH & STREAM MANAGEMENT API ENDPOINTS
   // ----------------------------------------------------
+  app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok' });
+  });
+
   app.get('/api/streams', authenticateToken, async (req: any, res) => {
     try {
       const dbUser = await db.getUserById(req.user.id);

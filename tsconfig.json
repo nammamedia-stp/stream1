@@ -26,9 +26,20 @@
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
+  "include": [
+    "server.ts",
+    "types.ts",
+    "App.tsx",
+    "index.tsx",
+    "vite.config.ts",
+    "components/**/*",
+    "services/**/*",
+    "utils/**/*"
+  ],
   "exclude": [
     "data",
     "dist",
-    "node_modules"
+    "node_modules",
+    "test_hls"
   ]
 }

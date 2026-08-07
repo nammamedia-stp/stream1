@@ -252,8 +252,8 @@ async function startServer() {
 
           const stats = fs.statSync(targetPath);
           const ageMs = Date.now() - stats.mtimeMs;
-          if (ageMs > 10000) {
-            console.log(`[HLS Middleware] Rejecting stale playlist for key "${streamKey}" (age: ${(ageMs / 1000).toFixed(1)}s > 10s)`);
+          if (ageMs > 20000) {
+            console.log(`[HLS Middleware] Rejecting stale playlist for key "${streamKey}" (age: ${(ageMs / 1000).toFixed(1)}s > 20s)`);
             return res.status(404).send('HLS Playlist Stale');
           }
         }
@@ -3409,6 +3409,18 @@ async function startServer() {
       // Allow connection
       console.log(`[RTMP Publish Callback] Accepted RTMP stream for key "${streamKey}". Title: "${stream.title}"`);
       
+      // Clear pending delayed cleanups for this stream key if re-published
+      if (pendingCleanups.has(streamKey)) {
+        clearTimeout(pendingCleanups.get(streamKey)!);
+        pendingCleanups.delete(streamKey);
+      }
+
+      // Remove stale HLS playlists from previous sessions to ensure clean startup state
+      const localStreamDir = path.resolve(`./data/hls/${streamKey}`);
+      const vpsStreamDir = `/var/www/hls/${streamKey}`;
+      if (fs.existsSync(localStreamDir)) { try { fs.rmSync(localStreamDir, { recursive: true, force: true }); } catch (e) {} }
+      if (fs.existsSync(vpsStreamDir)) { try { fs.rmSync(vpsStreamDir, { recursive: true, force: true }); } catch (e) {} }
+
       // Transition to 'live' in database
       await db.updateStream(stream.id, { 
         status: 'live',
@@ -3450,10 +3462,10 @@ async function startServer() {
       return res.status(400).send('Missing Stream Key');
     }
 
-    // Ignore stale publish_done calls if a newer publisher session has already connected
+    // Ignore stale publish_done calls if a newer publisher session has already connected or if clientId is missing while active
     const activeClientId = activeStreamClients.get(streamKey);
-    if (clientId && activeClientId && String(activeClientId) !== String(clientId)) {
-      console.log(`[RTMP Publish Done Callback] Ignoring stale publish_done for key "${streamKey}" (disconnect client ${clientId} != current active client ${activeClientId})`);
+    if (activeClientId && (!clientId || String(activeClientId) !== String(clientId))) {
+      console.log(`[RTMP Publish Done Callback] Ignoring stale publish_done for key "${streamKey}" (disconnect client ${clientId || 'unknown'} != active client ${activeClientId})`);
       return res.status(200).send('OK');
     }
 
@@ -4740,23 +4752,58 @@ async function startServer() {
           if (s.status === 'disabled') continue;
 
           const hlsKeyDir = getHlsDir(s.streamKey);
-          const masterPath = path.join(hlsKeyDir, 'master.m3u8');
-          const index720Path = path.join(hlsKeyDir, '720p', 'index.m3u8');
-
           let lastMtime = 0;
 
-          if (fs.existsSync(masterPath)) {
-            const stat = fs.statSync(masterPath);
-            lastMtime = stat.mtimeMs;
-          } else if (fs.existsSync(index720Path)) {
-            const stat = fs.statSync(index720Path);
-            lastMtime = stat.mtimeMs;
+          if (fs.existsSync(hlsKeyDir)) {
+            try {
+              const files = fs.readdirSync(hlsKeyDir);
+              for (const file of files) {
+                const fullPath = path.join(hlsKeyDir, file);
+                try {
+                  const stat = fs.statSync(fullPath);
+                  if (stat.mtimeMs > lastMtime) lastMtime = stat.mtimeMs;
+                  if (stat.isDirectory()) {
+                    const subFiles = fs.readdirSync(fullPath);
+                    for (const subFile of subFiles) {
+                      const subPath = path.join(fullPath, subFile);
+                      const subStat = fs.statSync(subPath);
+                      if (subStat.mtimeMs > lastMtime) lastMtime = subStat.mtimeMs;
+                    }
+                  }
+                } catch (_) {}
+              }
+            } catch (_) {}
           }
 
-          const isHlsFresh = (Date.now() - lastMtime) < 15000;
+          // Check if FFmpeg transcoder process is currently running for this stream key
+          const pidFile = `/tmp/ffmpeg_${s.streamKey}.pid`;
+          let isFfmpegRunning = false;
+          if (fs.existsSync(pidFile)) {
+            try {
+              const pidStr = fs.readFileSync(pidFile, 'utf-8').trim();
+              if (pidStr) {
+                const pid = parseInt(pidStr, 10);
+                if (!isNaN(pid) && pid > 0) {
+                  try {
+                    process.kill(pid, 0); // signal 0 checks process existence
+                    isFfmpegRunning = true;
+                  } catch (_) {
+                    isFfmpegRunning = false;
+                  }
+                }
+              }
+            } catch (_) {}
+          }
 
-          // Stream is considered active if HLS playlist was updated within 15s or DB status is live
-          const isCurrentlyActive = (isHlsFresh || s.status === 'live') && lastMtime > 0;
+          const isHlsFresh = lastMtime > 0 && (Date.now() - lastMtime) < 15000;
+
+          // Startup grace window: stream recently went live (<30s) or FFmpeg process is running
+          const startTimeMs = s.startTime ? new Date(s.startTime).getTime() : 0;
+          const streamAgeMs = startTimeMs > 0 ? (Date.now() - startTimeMs) : Infinity;
+          const isInStartupGrace = (s.status === 'live') && (streamAgeMs < 30000 || isFfmpegRunning);
+
+          // Stream is considered active if HLS playlist was updated within 15s OR it is in startup grace window
+          const isCurrentlyActive = isHlsFresh || isInStartupGrace;
 
           if (isCurrentlyActive) {
             activeCount++;

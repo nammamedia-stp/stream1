@@ -32,7 +32,12 @@ cleanup() {
         kill -TERM "$FFMPEG_PID" 2>/dev/null || true
         wait "$FFMPEG_PID" 2>/dev/null || true
     fi
-    rm -f "$PID_FILE" 2>/dev/null || true
+    if [ -f "$PID_FILE" ]; then
+        CURR_PID=$(cat "$PID_FILE" 2>/dev/null || echo "")
+        if [ "$CURR_PID" = "$FFMPEG_PID" ]; then
+            rm -f "$PID_FILE" 2>/dev/null || true
+        fi
+    fi
     rm -f "$FFMPEG_CMD_FILE" 2>/dev/null || true
 
     # HLS output directory cleanup is safely managed by StreamPulse server with a 60s grace period for encoder reconnects.
@@ -74,9 +79,17 @@ CONFIG_JSON=$(curl -sf --max-time 3 "http://127.0.0.1:3000/api/rtmp/transcode-co
 
 FFMPEG_CMD_FILE="/tmp/ffmpeg_cmd_${STREAM_KEY}.sh"
 
-node - "$CONFIG_JSON" "$RTMP_INPUT" "$HLS_PATH" "$FFMPEG_CMD_FILE" << 'EOF'
+# Probe incoming stream to determine if an audio track exists
+HAS_AUDIO_TRACK=$(ffprobe -v error -rw_timeout 3000000 -select_streams a:0 -show_entries stream=index -of csv=p=0 "$RTMP_INPUT" 2>/dev/null || echo "")
+HAS_AUDIO="false"
+if [ -n "$HAS_AUDIO_TRACK" ]; then
+  HAS_AUDIO="true"
+fi
+
+node - "$CONFIG_JSON" "$RTMP_INPUT" "$HLS_PATH" "$FFMPEG_CMD_FILE" "$HAS_AUDIO" << 'EOF'
 const fs = require('fs');
-const [,, configJsonStr, rtmpInput, hlsPath, outputFile] = process.argv;
+const [,, configJsonStr, rtmpInput, hlsPath, outputFile, hasAudioStr] = process.argv;
+const hasAudio = hasAudioStr === 'true';
 
 let config = null;
 try {
@@ -107,32 +120,27 @@ variants.forEach(v => {
   }
 });
 
-// Construct FFmpeg filter graph
+// Construct FFmpeg filter graph (only for transcoded variants, bypassing stream-copy / Original)
+const transcodedItems = variants.map((v, i) => {
+  const isCopy = !!(v.isOriginal || v.videoCodec === 'copy' || v.name === 'Original' || v.name === 'Source (Original)' || v.width === 0 || v.height === 0);
+  return { v, i, isCopy };
+}).filter(x => !x.isCopy);
+
 let filterParts = [];
-if (variants.length === 1) {
-  const v = variants[0];
-  if (v.width === 0 || v.height === 0 || v.name === 'Original' || v.name === 'Source (Original)') {
-    filterParts.push(`[v:0]null[v0]`);
-  } else {
-    filterParts.push(`[v:0]scale=w=${v.width}:h=${v.height}:force_original_aspect_ratio=decrease:flags=bicubic,pad=${v.width}:${v.height}:(ow-iw)/2:(oh-ih)/2,format=yuv420p[v0]`);
-  }
-} else {
-  let splitStr = `[v:0]split=${variants.length}`;
-  for (let i = 0; i < variants.length; i++) {
-    splitStr += `[vin${i}]`;
+if (transcodedItems.length === 1) {
+  const item = transcodedItems[0];
+  filterParts.push(`[0:v:0]scale=w=${item.v.width}:h=${item.v.height}:force_original_aspect_ratio=decrease:flags=bicubic,pad=${item.v.width}:${item.v.height}:(ow-iw)/2:(oh-ih)/2,format=yuv420p[v${item.i}]`);
+} else if (transcodedItems.length > 1) {
+  let splitStr = `[0:v:0]split=${transcodedItems.length}`;
+  for (let idx = 0; idx < transcodedItems.length; idx++) {
+    splitStr += `[vin${idx}]`;
   }
   filterParts.push(splitStr);
 
-  variants.forEach((v, i) => {
-    if (v.width === 0 || v.height === 0 || v.name === 'Original' || v.name === 'Source (Original)') {
-      filterParts.push(`[vin${i}]null[v${i}]`);
-    } else {
-      filterParts.push(`[vin${i}]scale=w=${v.width}:h=${v.height}:force_original_aspect_ratio=decrease:flags=bicubic,pad=${v.width}:${v.height}:(ow-iw)/2:(oh-ih)/2,format=yuv420p[v${i}]`);
-    }
+  transcodedItems.forEach((item, idx) => {
+    filterParts.push(`[vin${idx}]scale=w=${item.v.width}:h=${item.v.height}:force_original_aspect_ratio=decrease:flags=bicubic,pad=${item.v.width}:${item.v.height}:(ow-iw)/2:(oh-ih)/2,format=yuv420p[v${item.i}]`);
   });
 }
-
-const filterComplex = filterParts.join(';\n ');
 
 const args = [
   'exec',
@@ -142,14 +150,18 @@ const args = [
   '-analyzeduration', '500000',
   '-probesize', '500000',
   '-fflags', '+genpts+nobuffer',
-  '-i', `"${rtmpInput}"`,
-  '-filter_complex', `"${filterComplex}"`
+  '-i', `"${rtmpInput}"`
 ];
+
+if (filterParts.length > 0) {
+  const filterComplex = filterParts.join(';\n ');
+  args.push('-filter_complex', `"${filterComplex}"`);
+}
 
 let varStreamMapParts = [];
 
 variants.forEach((v, i) => {
-  const isCopy = v.isOriginal || v.videoCodec === 'copy' || v.name === 'Original' || v.name === 'Source (Original)';
+  const isCopy = !!(v.isOriginal || v.videoCodec === 'copy' || v.name === 'Original' || v.name === 'Source (Original)' || v.width === 0 || v.height === 0);
   const preset = v.encoderPreset || 'superfast';
 
   let bv = v.bitrate;
@@ -170,12 +182,10 @@ variants.forEach((v, i) => {
   }
 
   if (isCopy) {
-    args.push(
-      '-map', `"[v${i}]"`,
-      `-c:v:${i}`, 'copy',
-      '-map', '0:a:0?',
-      `-c:a:${i}`, 'copy'
-    );
+    args.push('-map', '0:v:0', `-c:v:${i}`, 'copy');
+    if (hasAudio) {
+      args.push('-map', '0:a:0?', `-c:a:${i}`, 'copy');
+    }
   } else {
     args.push(
       '-map', `"[v${i}]"`,
@@ -189,16 +199,23 @@ variants.forEach((v, i) => {
       `-bufsize:v:${i}`, bufsize,
       `-g:v:${i}`, '60',
       `-keyint_min:v:${i}`, '60',
-      `-sc_threshold:v:${i}`, '0',
-      `-bsf:v:${i}`, 'h264_mp4toannexb',
-      '-map', '0:a:0?',
-      `-c:a:${i}`, 'aac',
-      `-b:a:${i}`, ba,
-      `-ac:a:${i}`, '2',
-      `-ar:a:${i}`, '44100'
+      `-sc_threshold:v:${i}`, '0'
     );
+    if (hasAudio) {
+      args.push(
+        '-map', '0:a:0?',
+        `-c:a:${i}`, 'aac',
+        `-b:a:${i}`, ba,
+        `-ac:a:${i}`, '2',
+        `-ar:a:${i}`, '44100'
+      );
+    }
   }
-  varStreamMapParts.push(`v:${i},a:${i},name:${v.name}`);
+  if (hasAudio) {
+    varStreamMapParts.push(`v:${i},a:${i},name:${v.name}`);
+  } else {
+    varStreamMapParts.push(`v:${i},name:${v.name}`);
+  }
 });
 
 args.push(

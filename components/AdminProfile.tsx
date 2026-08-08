@@ -121,10 +121,23 @@ export const AdminProfile: React.FC<AdminProfileProps> = ({
         })
       });
 
-      const data = await res.json();
+      if (res.status === 401) {
+        throw new Error('Your session token has expired or is invalid. Please refresh the page or log in again.');
+      }
+
+      const text = await res.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        if (!res.ok) {
+          throw new Error(`Server error (${res.status}): Failed to update admin profile`);
+        }
+        throw new Error('Invalid response format from server');
+      }
 
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to update admin profile');
+        throw new Error(data.error || `Failed to update admin profile (${res.status})`);
       }
 
       setSuccessMessage('Admin profile updated successfully!');

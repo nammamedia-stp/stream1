@@ -67,7 +67,9 @@ export const UserProfile: React.FC<UserProfileProps> = ({
       try {
         const res = await fetchWithNetworkHeaders('/api/user/profile');
         if (res.ok) {
-          const data = await res.json();
+          const text = await res.text();
+          let data: any = {};
+          try { data = JSON.parse(text); } catch (_) {}
           if (data.user) {
             setUsername(data.user.username || '');
             setDisplayName(data.user.display_name || '');
@@ -185,10 +187,23 @@ export const UserProfile: React.FC<UserProfileProps> = ({
         })
       });
 
-      const data = await res.json();
+      if (res.status === 401) {
+        throw new Error('Your session token has expired or is invalid. Please refresh the page or log in again.');
+      }
+
+      const text = await res.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        if (!res.ok) {
+          throw new Error(`Server error (${res.status}): Failed to update profile`);
+        }
+        throw new Error('Invalid response format from server');
+      }
 
       if (!res.ok) {
-        throw new Error(data.error || 'Failed to update profile');
+        throw new Error(data.error || `Failed to update profile (${res.status})`);
       }
 
       setSuccessMessage('Your user profile has been updated successfully!');

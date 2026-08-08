@@ -753,7 +753,7 @@ async function startServer() {
 
     jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
       if (err) {
-        return res.status(403).json({ error: 'Invalid or expired token' });
+        return res.status(401).json({ error: 'Invalid or expired token' });
       }
       req.user = user;
       next();
@@ -1310,6 +1310,36 @@ async function startServer() {
       res.status(500).json({ error: 'Failed to update admin profile' });
     }
   };
+
+  app.get('/api/admin/profile', authenticateToken, requireAdmin, async (req: any, res: any) => {
+    try {
+      const adminId = Number(req.user?.id);
+      if (isNaN(adminId)) {
+        return res.status(400).json({ error: 'Invalid user ID in session token' });
+      }
+
+      const user = await db.getUserById(adminId);
+      if (!user) {
+        return res.status(404).json({ error: 'Admin account not found' });
+      }
+
+      res.json({
+        user: {
+          id: Number(user.id),
+          username: user.username,
+          display_name: user.display_name || user.username,
+          role: user.role,
+          created_at: user.created_at,
+          status: user.status || 'enabled',
+          assigned_stream_id: user.assigned_stream_id || null,
+          mustResetPassword: forcedPasswordResets.has(Number(user.id))
+        }
+      });
+    } catch (err) {
+      console.error('Error fetching admin profile:', err);
+      res.status(500).json({ error: 'Failed to fetch admin profile' });
+    }
+  });
 
   app.put('/api/admin/profile', authenticateToken, requireAdmin, handleAdminProfileUpdate);
   app.post('/api/admin/profile/update', authenticateToken, requireAdmin, handleAdminProfileUpdate);

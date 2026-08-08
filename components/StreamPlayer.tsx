@@ -1141,7 +1141,10 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     }
   }, [stream.status]);
 
-  // Refs for tracking recovery and reconnect engine state across playback lifecycles
+  // ----------------------------------------------------
+  // PLAYBACK SESSION FENCE & RECONNECT ENGINE STATE REFS
+  // ----------------------------------------------------
+  // Refs for tracking recovery and reconnect engine state across playback lifecycles (Single Hls.js Instance Guaranteed)
   const playbackSessionIdRef = useRef<number>(0);
   const isRecoveringRef = useRef<boolean>(false);
   const isPollingRef = useRef<boolean>(false);

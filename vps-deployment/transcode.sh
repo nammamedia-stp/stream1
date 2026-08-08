@@ -1,7 +1,8 @@
 #!/bin/bash
 
-# StreamPulse Multi-Bitrate Adaptive HLS Transcoding Script
+# StreamPulse Multi-Bitrate Adaptive HLS Transcoding Script v2.1
 # Dynamic Variant Configuration & Hostinger VPS Production Optimized Engine
+# Strict Session Ownership & Parent/Child PID Isolation Enabled
 # Args: $1 = Stream Key / Stream Name
 
 set -euo pipefail
@@ -11,7 +12,10 @@ HLS_PATH="/var/www/hls/${STREAM_KEY}"
 RTMP_INPUT="rtmp://127.0.0.1:1935/live/${STREAM_KEY}"
 LOG_FILE="/var/log/nginx/transcode_${STREAM_KEY}.log"
 PID_FILE="/tmp/ffmpeg_${STREAM_KEY}.pid"
+TRANSCODER_PID_FILE="/tmp/transcoder_${STREAM_KEY}.pid"
+SESSION_FILE="/tmp/transcoder_${STREAM_KEY}.session"
 FFMPEG_CMD_FILE="/tmp/ffmpeg_cmd_${STREAM_KEY}.sh"
+SESSION_ID="$(date +%s%N)_$$"
 
 if [ -z "$STREAM_KEY" ]; then
     echo "No stream key specified. Exiting..."
@@ -26,7 +30,7 @@ log() {
 }
 
 log "=========================================================="
-log "StreamPulse Production Transcoder Initiated for key: ${STREAM_KEY}"
+log "StreamPulse Production Transcoder Initiated for key: ${STREAM_KEY} | Session: ${SESSION_ID}"
 log "RTMP Input Target: ${RTMP_INPUT}"
 
 FFMPEG_PID=""
@@ -40,7 +44,7 @@ cleanup() {
     CLEANUP_DONE=1
     trap - EXIT SIGTERM SIGINT SIGHUP SIGQUIT
 
-    log "Termination event received (exit status: $exit_code). Initiating cleanup..."
+    log "Termination event received (exit status: $exit_code). Initiating cleanup for session: ${SESSION_ID}..."
 
     if [ -n "${FFMPEG_PID:-}" ] && kill -0 "$FFMPEG_PID" 2>/dev/null; then
         log "Sending SIGTERM to child FFmpeg process (PID: $FFMPEG_PID)..."
@@ -56,21 +60,39 @@ cleanup() {
         fi
     fi
 
-    # Clean up stale HLS playlists and segments so Nginx immediately returns 404
-    # and players switch to OFFLINE state instead of looping old segments.
-    log "Cleaning up HLS output directory for ${STREAM_KEY}..."
-    rm -rf "$HLS_PATH" 2>/dev/null || true
+    # Check if this session still owns the active stream session before removing HLS output
+    local active_session=""
+    if [ -f "$SESSION_FILE" ]; then
+        active_session=$(cat "$SESSION_FILE" 2>/dev/null || echo "")
+    fi
+
+    if [ -z "$active_session" ] || [ "$active_session" = "$SESSION_ID" ]; then
+        log "Cleaning up HLS output directory for ${STREAM_KEY} (Session: ${SESSION_ID})..."
+        rm -rf "$HLS_PATH" 2>/dev/null || true
+        rm -f "$SESSION_FILE" 2>/dev/null || true
+    else
+        log "Skipping HLS directory cleanup for ${STREAM_KEY}: new active session detected ($active_session != $SESSION_ID)."
+    fi
 
     if [ -f "$PID_FILE" ]; then
         local curr_pid
         curr_pid=$(cat "$PID_FILE" 2>/dev/null || echo "")
-        if [ "$curr_pid" = "${FFMPEG_PID:-}" ] || [ "$curr_pid" = "$$" ]; then
+        if [ "$curr_pid" = "${FFMPEG_PID:-}" ]; then
             rm -f "$PID_FILE" 2>/dev/null || true
         fi
     fi
+
+    if [ -f "$TRANSCODER_PID_FILE" ]; then
+        local curr_trans_pid
+        curr_trans_pid=$(cat "$TRANSCODER_PID_FILE" 2>/dev/null || echo "")
+        if [ "$curr_trans_pid" = "$$" ]; then
+            rm -f "$TRANSCODER_PID_FILE" 2>/dev/null || true
+        fi
+    fi
+
     rm -f "$FFMPEG_CMD_FILE" 2>/dev/null || true
 
-    log "Transcoding process for ${STREAM_KEY} finished."
+    log "Transcoding process for ${STREAM_KEY} (Session: ${SESSION_ID}) finished."
 
     if [ "$exit_code" -ne 0 ]; then
         exit "$exit_code"
@@ -79,27 +101,45 @@ cleanup() {
 
 trap 'cleanup' SIGTERM SIGINT SIGHUP SIGQUIT EXIT
 
-# Graceful cleanup of any prior transcoder or FFmpeg session for this stream key
-if [ -f "$PID_FILE" ]; then
-    OLD_PID=$(cat "$PID_FILE" 2>/dev/null || echo "")
-    if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-        if grep -q "${STREAM_KEY}" "/proc/$OLD_PID/cmdline" 2>/dev/null; then
-            log "Gracefully stopping prior session (PID $OLD_PID) for stream key: ${STREAM_KEY}"
-            kill -TERM "$OLD_PID" 2>/dev/null || true
+# Graceful cleanup of any prior transcoder instance for this stream key
+if [ -f "$TRANSCODER_PID_FILE" ]; then
+    OLD_TRANSCODER_PID=$(cat "$TRANSCODER_PID_FILE" 2>/dev/null || echo "")
+    if [ -n "$OLD_TRANSCODER_PID" ] && kill -0 "$OLD_TRANSCODER_PID" 2>/dev/null; then
+        if grep -q "${STREAM_KEY}" "/proc/$OLD_TRANSCODER_PID/cmdline" 2>/dev/null; then
+            log "Gracefully stopping prior transcoder session (PID $OLD_TRANSCODER_PID) for stream key: ${STREAM_KEY}"
+            kill -TERM "$OLD_TRANSCODER_PID" 2>/dev/null || true
             count=0
-            while kill -0 "$OLD_PID" 2>/dev/null && [ $count -lt 30 ]; do
+            while kill -0 "$OLD_TRANSCODER_PID" 2>/dev/null && [ $count -lt 30 ]; do
                 sleep 0.1
                 count=$((count + 1))
             done
-            if kill -0 "$OLD_PID" 2>/dev/null; then
-                kill -KILL "$OLD_PID" 2>/dev/null || true
+            if kill -0 "$OLD_TRANSCODER_PID" 2>/dev/null; then
+                log "Prior transcoder session (PID $OLD_TRANSCODER_PID) did not stop on SIGTERM. Sending SIGKILL..."
+                kill -KILL "$OLD_TRANSCODER_PID" 2>/dev/null || true
             fi
+        fi
+    fi
+    rm -f "$TRANSCODER_PID_FILE" 2>/dev/null || true
+fi
+
+# Write current transcoder script PID and Session ID
+echo "$$" > "$TRANSCODER_PID_FILE"
+echo "$SESSION_ID" > "$SESSION_FILE"
+
+# Clean up any leftover FFmpeg child process PID file from prior session
+if [ -f "$PID_FILE" ]; then
+    OLD_FFMPEG_PID=$(cat "$PID_FILE" 2>/dev/null || echo "")
+    if [ -n "$OLD_FFMPEG_PID" ] && kill -0 "$OLD_FFMPEG_PID" 2>/dev/null; then
+        kill -TERM "$OLD_FFMPEG_PID" 2>/dev/null || true
+        sleep 0.2
+        if kill -0 "$OLD_FFMPEG_PID" 2>/dev/null; then
+            kill -KILL "$OLD_FFMPEG_PID" 2>/dev/null || true
         fi
     fi
     rm -f "$PID_FILE" 2>/dev/null || true
 fi
 
-# Ensure output HLS root directory exists and is clean for fresh session
+# Ensure output HLS root directory exists and is completely clean for fresh session
 rm -rf "$HLS_PATH" 2>/dev/null || true
 mkdir -p "$HLS_PATH" 2>/dev/null || true
 
@@ -329,9 +369,8 @@ while [ $ffmpeg_retry_count -lt $MAX_FFMPEG_RETRIES ]; do
         log "[FFMPEG RETRY] Re-probing RTMP input before attempt ${ffmpeg_retry_count}/${MAX_FFMPEG_RETRIES}..."
         probe_stream
         if [ "$HAS_VIDEO" != "true" ]; then
-            log "[FFMPEG RETRY] Video track missing on re-probe. Waiting 2s..."
-            sleep 2
-            continue
+            log "[FFMPEG RETRY] Video track missing on re-probe. Publisher disconnected or unavailable. Exiting."
+            break
         fi
         generate_ffmpeg_command
         chmod +x "$FFMPEG_CMD_FILE" 2>/dev/null || true
@@ -360,7 +399,16 @@ while [ $ffmpeg_retry_count -lt $MAX_FFMPEG_RETRIES ]; do
         break
     fi
 
-    # Reset retry counter if process was running stably
+    # Check if publisher disconnected vs transient failure
+    log "[RTMP CHECK] Probing RTMP input to verify if publisher is still active..."
+    probe_stream
+
+    if [ "$HAS_VIDEO" != "true" ]; then
+        log "[RTMP DISCONNECT] RTMP stream no longer active on ${RTMP_INPUT}. Publisher disconnected. Stopping transcoder."
+        break
+    fi
+
+    # Reset retry counter if process was running stably before exiting
     if [ $runtime -ge $STARTUP_THRESHOLD_SECONDS ]; then
         log "[FFMPEG STABLE] FFmpeg ran for ${runtime}s (>= ${STARTUP_THRESHOLD_SECONDS}s). Resetting retry counter."
         ffmpeg_retry_count=0
@@ -379,4 +427,5 @@ while [ $ffmpeg_retry_count -lt $MAX_FFMPEG_RETRIES ]; do
         exit $FFMPEG_EXIT
     fi
 done
+
 

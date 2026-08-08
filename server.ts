@@ -3398,11 +3398,14 @@ async function startServer() {
     }
   });
 
+  // ----------------------------------------------------
+  // RTMP PUBLISHER SESSION MANAGEMENT & ANTI-RACE HANDLERS
+  // ----------------------------------------------------
   // Track active RTMP client connection IDs to prevent stale publish_done race conditions on reconnect
   const activeStreamClients = new Map<string, string | number>();
   const pendingCleanups = new Map<string, NodeJS.Timeout>();
 
-  // RTMP Ingest Validation HTTP Callback
+  // RTMP Ingest Validation HTTP Callback (Nginx RTMP on_publish)
   app.post('/api/rtmp/publish', async (req, res) => {
     // Parse form body or query or json safely
     const streamKey = (req.body && (req.body.name || req.body.key || req.body.stream_key)) || req.query.name || req.query.key;

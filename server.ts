@@ -730,7 +730,7 @@ async function startServer() {
         '-f', 'hls',
         '-hls_time', String(segmentDuration),
         '-hls_list_size', '5',
-        '-hls_flags', 'delete_segments+independent_segments+omit_endlist+append_list+discont_start',
+        '-hls_flags', 'delete_segments+independent_segments+omit_endlist',
         '-start_number', String(startSeqNum),
         '-hls_segment_filename', path.join(hlsDir, safeName, `seg_${sessionTag}_%05d.ts`),
         path.join(hlsDir, safeName, 'index.m3u8')
@@ -3530,20 +3530,16 @@ async function startServer() {
           } catch (_) {}
         }
 
-        // 2. Schedule delayed cleanup (60s grace period) for HLS assets to allow encoder reconnects without HTTP 404s
+        // 2. Immediately clean up HLS assets so players receive HTTP 404 and switch to OFFLINE state instead of looping stale segments
         if (pendingCleanups.has(streamKey)) {
           clearTimeout(pendingCleanups.get(streamKey)!);
-        }
-        const GRACE_PERIOD_MS = 60000;
-        const timer = setTimeout(() => {
           pendingCleanups.delete(streamKey);
-          console.log(`[RTMP Cleanup] Grace period expired for stream key "${streamKey}". Cleaning up HLS directories.`);
-          const localStreamDir = path.resolve(`./data/hls/${streamKey}`);
-          const vpsStreamDir = `/var/www/hls/${streamKey}`;
-          if (fs.existsSync(localStreamDir)) { try { fs.rmSync(localStreamDir, { recursive: true, force: true }); } catch (e) {} }
-          if (fs.existsSync(vpsStreamDir)) { try { fs.rmSync(vpsStreamDir, { recursive: true, force: true }); } catch (e) {} }
-        }, GRACE_PERIOD_MS);
-        pendingCleanups.set(streamKey, timer);
+        }
+        console.log(`[RTMP Cleanup] Stream disconnected for key "${streamKey}". Cleaning up HLS directories immediately.`);
+        const localStreamDir = path.resolve(`./data/hls/${streamKey}`);
+        const vpsStreamDir = `/var/www/hls/${streamKey}`;
+        if (fs.existsSync(localStreamDir)) { try { fs.rmSync(localStreamDir, { recursive: true, force: true }); } catch (e) {} }
+        if (fs.existsSync(vpsStreamDir)) { try { fs.rmSync(vpsStreamDir, { recursive: true, force: true }); } catch (e) {} }
 
         const updatedOffline = await db.getStreamByKey(streamKey);
         const augmentedOffline = updatedOffline ? await augmentStreamWithPlayback(updatedOffline, req) : null;

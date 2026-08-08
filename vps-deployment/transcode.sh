@@ -56,6 +56,11 @@ cleanup() {
         fi
     fi
 
+    # Clean up stale HLS playlists and segments so Nginx immediately returns 404
+    # and players switch to OFFLINE state instead of looping old segments.
+    log "Cleaning up HLS output directory for ${STREAM_KEY}..."
+    rm -rf "$HLS_PATH" 2>/dev/null || true
+
     if [ -f "$PID_FILE" ]; then
         local curr_pid
         curr_pid=$(cat "$PID_FILE" 2>/dev/null || echo "")
@@ -94,7 +99,8 @@ if [ -f "$PID_FILE" ]; then
     rm -f "$PID_FILE" 2>/dev/null || true
 fi
 
-# Ensure output HLS root directory exists
+# Ensure output HLS root directory exists and is clean for fresh session
+rm -rf "$HLS_PATH" 2>/dev/null || true
 mkdir -p "$HLS_PATH" 2>/dev/null || true
 
 # Function to probe both video and audio tracks on RTMP_INPUT
@@ -294,7 +300,7 @@ args.push(
   '-f', 'hls',
   '-hls_time', '2',
   '-hls_list_size', '6',
-  '-hls_flags', 'delete_segments+independent_segments+omit_endlist+append_list+discont_start',
+  '-hls_flags', 'delete_segments+independent_segments+omit_endlist',
   '-start_number', '1',
   '-hls_segment_type', 'mpegts',
   '-master_pl_name', 'master.m3u8',

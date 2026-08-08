@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # StreamPulse Multi-Bitrate Adaptive HLS Transcoding Script
-# Dynamic Variant Configuration & Hostinger VPS (2 vCPU / 8GB RAM) Production Optimized Engine
+# Dynamic Variant Configuration & Hostinger VPS Production Optimized Engine
 # Args: $1 = Stream Key / Stream Name
 
 set -euo pipefail
@@ -10,83 +10,156 @@ STREAM_KEY=$1
 HLS_PATH="/var/www/hls/${STREAM_KEY}"
 RTMP_INPUT="rtmp://127.0.0.1:1935/live/${STREAM_KEY}"
 LOG_FILE="/var/log/nginx/transcode_${STREAM_KEY}.log"
+PID_FILE="/tmp/ffmpeg_${STREAM_KEY}.pid"
+FFMPEG_CMD_FILE="/tmp/ffmpeg_cmd_${STREAM_KEY}.sh"
 
 if [ -z "$STREAM_KEY" ]; then
     echo "No stream key specified. Exiting..."
     exit 1
 fi
 
+mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
 touch "$LOG_FILE" 2>/dev/null || true
-echo "==========================================================" >> "$LOG_FILE"
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] StreamPulse Production Transcoder Initiated for key: ${STREAM_KEY}" >> "$LOG_FILE"
+
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE"
+}
+
+log "=========================================================="
+log "StreamPulse Production Transcoder Initiated for key: ${STREAM_KEY}"
+log "RTMP Input Target: ${RTMP_INPUT}"
 
 FFMPEG_PID=""
-PID_FILE="/tmp/ffmpeg_${STREAM_KEY}.pid"
-FFMPEG_CMD_FILE="/tmp/ffmpeg_cmd_${STREAM_KEY}.sh"
+CLEANUP_DONE=0
 
 cleanup() {
-    trap - EXIT SIGTERM SIGINT SIGHUP SIGQUIT
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Termination signal received. Initiating cleanup..." >> "$LOG_FILE"
-    if [ -n "$FFMPEG_PID" ]; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Sending SIGTERM to FFmpeg PID: $FFMPEG_PID" >> "$LOG_FILE"
-        kill -TERM "$FFMPEG_PID" 2>/dev/null || true
-        wait "$FFMPEG_PID" 2>/dev/null || true
+    local exit_code=$?
+    if [ "$CLEANUP_DONE" -eq 1 ]; then
+        return
     fi
+    CLEANUP_DONE=1
+    trap - EXIT SIGTERM SIGINT SIGHUP SIGQUIT
+
+    log "Termination event received (exit status: $exit_code). Initiating cleanup..."
+
+    if [ -n "${FFMPEG_PID:-}" ] && kill -0 "$FFMPEG_PID" 2>/dev/null; then
+        log "Sending SIGTERM to child FFmpeg process (PID: $FFMPEG_PID)..."
+        kill -TERM "$FFMPEG_PID" 2>/dev/null || true
+        local count=0
+        while kill -0 "$FFMPEG_PID" 2>/dev/null && [ $count -lt 30 ]; do
+            sleep 0.1
+            count=$((count + 1))
+        done
+        if kill -0 "$FFMPEG_PID" 2>/dev/null; then
+            log "FFmpeg process PID $FFMPEG_PID did not exit on SIGTERM. Sending SIGKILL..."
+            kill -KILL "$FFMPEG_PID" 2>/dev/null || true
+        fi
+    fi
+
     if [ -f "$PID_FILE" ]; then
-        CURR_PID=$(cat "$PID_FILE" 2>/dev/null || echo "")
-        if [ "$CURR_PID" = "$FFMPEG_PID" ]; then
+        local curr_pid
+        curr_pid=$(cat "$PID_FILE" 2>/dev/null || echo "")
+        if [ "$curr_pid" = "${FFMPEG_PID:-}" ] || [ "$curr_pid" = "$$" ]; then
             rm -f "$PID_FILE" 2>/dev/null || true
         fi
     fi
     rm -f "$FFMPEG_CMD_FILE" 2>/dev/null || true
 
-    # HLS output directory cleanup is safely managed by StreamPulse server with a 60s grace period for encoder reconnects.
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Transcoding process for ${STREAM_KEY} stopped." >> "$LOG_FILE"
-    exit 0
+    log "Transcoding process for ${STREAM_KEY} finished."
+
+    if [ "$exit_code" -ne 0 ]; then
+        exit "$exit_code"
+    fi
 }
 
 trap 'cleanup' SIGTERM SIGINT SIGHUP SIGQUIT EXIT
 
-# Graceful cleanup of any previous FFmpeg session for this specific stream key using its isolated PID file
+# Graceful cleanup of any prior transcoder or FFmpeg session for this stream key
 if [ -f "$PID_FILE" ]; then
     OLD_PID=$(cat "$PID_FILE" 2>/dev/null || echo "")
     if [ -n "$OLD_PID" ] && kill -0 "$OLD_PID" 2>/dev/null; then
-        if grep -q "ffmpeg" "/proc/$OLD_PID/cmdline" 2>/dev/null && grep -q "${STREAM_KEY}" "/proc/$OLD_PID/cmdline" 2>/dev/null; then
-            STATE=$(awk '{print $3}' "/proc/$OLD_PID/stat" 2>/dev/null || echo "")
-            if [ "$STATE" != "Z" ]; then
-                echo "[$(date '+%Y-%m-%d %H:%M:%S')] Gracefully stopping prior FFmpeg session (PID $OLD_PID) for stream key: ${STREAM_KEY}" >> "$LOG_FILE"
-                kill -TERM "$OLD_PID" 2>/dev/null || true
-                timeout=50
-                while kill -0 "$OLD_PID" 2>/dev/null; do
-                    STATE=$(awk '{print $3}' "/proc/$OLD_PID/stat" 2>/dev/null || echo "")
-                    if [ "$STATE" = "Z" ]; then
-                        break
-                    fi
-                    sleep 0.1
-                    timeout=$((timeout - 1))
-                    if [ "$timeout" -le 0 ]; then
-                        break
-                    fi
-                done
+        if grep -q "${STREAM_KEY}" "/proc/$OLD_PID/cmdline" 2>/dev/null; then
+            log "Gracefully stopping prior session (PID $OLD_PID) for stream key: ${STREAM_KEY}"
+            kill -TERM "$OLD_PID" 2>/dev/null || true
+            count=0
+            while kill -0 "$OLD_PID" 2>/dev/null && [ $count -lt 30 ]; do
+                sleep 0.1
+                count=$((count + 1))
+            done
+            if kill -0 "$OLD_PID" 2>/dev/null; then
+                kill -KILL "$OLD_PID" 2>/dev/null || true
             fi
         fi
     fi
     rm -f "$PID_FILE" 2>/dev/null || true
 fi
 
+# Ensure output HLS root directory exists
+mkdir -p "$HLS_PATH" 2>/dev/null || true
+
+# Function to probe both video and audio tracks on RTMP_INPUT
+HAS_VIDEO="false"
+HAS_AUDIO="false"
+
+probe_stream() {
+    local probe_v
+    probe_v=$(ffprobe -v error \
+        -rw_timeout 5000000 \
+        -analyzeduration 10000000 \
+        -probesize 10000000 \
+        -select_streams v:0 \
+        -show_entries stream=codec_name \
+        -of csv=p=0 "$RTMP_INPUT" 2>/dev/null || echo "")
+
+    local probe_a
+    probe_a=$(ffprobe -v error \
+        -rw_timeout 5000000 \
+        -analyzeduration 10000000 \
+        -probesize 10000000 \
+        -select_streams a:0 \
+        -show_entries stream=codec_name \
+        -of csv=p=0 "$RTMP_INPUT" 2>/dev/null || echo "")
+
+    HAS_VIDEO="false"
+    HAS_AUDIO="false"
+
+    if [ -n "$probe_v" ]; then
+        HAS_VIDEO="true"
+    fi
+    if [ -n "$probe_a" ]; then
+        HAS_AUDIO="true"
+    fi
+}
+
+# 1. PROBE PHASE: Wait for video track to become available before attempting FFmpeg launch
+MAX_PROBE_ATTEMPTS=15
+probe_attempt=0
+
+while [ $probe_attempt -lt $MAX_PROBE_ATTEMPTS ]; do
+    probe_attempt=$((probe_attempt + 1))
+    probe_stream
+    log "[PROBE] Attempt ${probe_attempt}/${MAX_PROBE_ATTEMPTS} for ${STREAM_KEY} | Video detected: ${HAS_VIDEO} | Audio detected: ${HAS_AUDIO}"
+
+    if [ "$HAS_VIDEO" = "true" ]; then
+        log "[PROBE SUCCESS] Video stream detected on attempt ${probe_attempt}."
+        break
+    fi
+
+    if [ $probe_attempt -lt $MAX_PROBE_ATTEMPTS ]; then
+        sleep 1.5
+    fi
+done
+
+if [ "$HAS_VIDEO" != "true" ]; then
+    log "[PROBE ERROR] Video stream not detected on ${RTMP_INPUT} after ${MAX_PROBE_ATTEMPTS} attempts. Exiting."
+    exit 1
+fi
+
 # Query dynamic stream profile configuration from local API
 CONFIG_JSON=$(curl -sf --max-time 3 "http://127.0.0.1:3000/api/rtmp/transcode-config/${STREAM_KEY}" || echo "")
 
-FFMPEG_CMD_FILE="/tmp/ffmpeg_cmd_${STREAM_KEY}.sh"
-
-# Probe incoming stream to determine if an audio track exists
-HAS_AUDIO_TRACK=$(ffprobe -v error -rw_timeout 3000000 -select_streams a:0 -show_entries stream=index -of csv=p=0 "$RTMP_INPUT" 2>/dev/null || echo "")
-HAS_AUDIO="false"
-if [ -n "$HAS_AUDIO_TRACK" ]; then
-  HAS_AUDIO="true"
-fi
-
-node - "$CONFIG_JSON" "$RTMP_INPUT" "$HLS_PATH" "$FFMPEG_CMD_FILE" "$HAS_AUDIO" << 'EOF'
+generate_ffmpeg_command() {
+    node - "$CONFIG_JSON" "$RTMP_INPUT" "$HLS_PATH" "$FFMPEG_CMD_FILE" "$HAS_AUDIO" << 'EOF'
 const fs = require('fs');
 const [,, configJsonStr, rtmpInput, hlsPath, outputFile, hasAudioStr] = process.argv;
 const hasAudio = hasAudioStr === 'true';
@@ -147,9 +220,8 @@ const args = [
   'ffmpeg',
   '-y',
   '-rw_timeout', '5000000',
-  '-analyzeduration', '500000',
-  '-probesize', '500000',
-  '-fflags', '+genpts+nobuffer',
+  '-analyzeduration', '10000000',
+  '-probesize', '10000000',
   '-i', `"${rtmpInput}"`
 ];
 
@@ -233,20 +305,72 @@ args.push(
 
 fs.writeFileSync(outputFile, args.join(' '));
 EOF
+}
 
+generate_ffmpeg_command
 chmod +x "$FFMPEG_CMD_FILE" 2>/dev/null || true
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Executing FFmpeg production command..." >> "$LOG_FILE"
-cat "$FFMPEG_CMD_FILE" >> "$LOG_FILE"
-echo "" >> "$LOG_FILE"
+# 2. FFMPEG EXECUTION & RETRY LOOP: Resilient against initial RTMP connection race conditions
+MAX_FFMPEG_RETRIES=10
+ffmpeg_retry_count=0
+STARTUP_THRESHOLD_SECONDS=10
 
-bash "$FFMPEG_CMD_FILE" >> "$LOG_FILE" 2>&1 &
-FFMPEG_PID=$!
-echo "$FFMPEG_PID" > "$PID_FILE" 2>/dev/null || true
+while [ $ffmpeg_retry_count -lt $MAX_FFMPEG_RETRIES ]; do
+    ffmpeg_retry_count=$((ffmpeg_retry_count + 1))
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] FFmpeg running with PID: $FFMPEG_PID" >> "$LOG_FILE"
-FFMPEG_EXIT=0
-wait "$FFMPEG_PID" || FFMPEG_EXIT=$?
+    # Re-probe and regenerate command if retrying after startup exit
+    if [ $ffmpeg_retry_count -gt 1 ]; then
+        log "[FFMPEG RETRY] Re-probing RTMP input before attempt ${ffmpeg_retry_count}/${MAX_FFMPEG_RETRIES}..."
+        probe_stream
+        if [ "$HAS_VIDEO" != "true" ]; then
+            log "[FFMPEG RETRY] Video track missing on re-probe. Waiting 2s..."
+            sleep 2
+            continue
+        fi
+        generate_ffmpeg_command
+        chmod +x "$FFMPEG_CMD_FILE" 2>/dev/null || true
+    fi
 
-rm -f "$FFMPEG_CMD_FILE" 2>/dev/null || true
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Transcode process ended with exit code: ${FFMPEG_EXIT}" >> "$LOG_FILE"
+    log "[FFMPEG LAUNCH] Attempt ${ffmpeg_retry_count}/${MAX_FFMPEG_RETRIES} | Command: $(cat "$FFMPEG_CMD_FILE")"
+
+    start_time=$(date +%s)
+
+    bash "$FFMPEG_CMD_FILE" >> "$LOG_FILE" 2>&1 &
+    FFMPEG_PID=$!
+    echo "$FFMPEG_PID" > "$PID_FILE"
+
+    log "[FFMPEG RUNNING] Stream Key: ${STREAM_KEY} | PID: ${FFMPEG_PID} | Attempt: ${ffmpeg_retry_count}"
+
+    FFMPEG_EXIT=0
+    wait "$FFMPEG_PID" || FFMPEG_EXIT=$?
+
+    end_time=$(date +%s)
+    runtime=$((end_time - start_time))
+
+    log "[FFMPEG EXITED] Stream Key: ${STREAM_KEY} | PID: ${FFMPEG_PID} | Exit Code: ${FFMPEG_EXIT} | Runtime: ${runtime}s"
+
+    if [ "$CLEANUP_DONE" -eq 1 ]; then
+        log "[FFMPEG CLEANUP] Process exited due to script termination signal. Stopping loop."
+        break
+    fi
+
+    # Reset retry counter if process was running stably
+    if [ $runtime -ge $STARTUP_THRESHOLD_SECONDS ]; then
+        log "[FFMPEG STABLE] FFmpeg ran for ${runtime}s (>= ${STARTUP_THRESHOLD_SECONDS}s). Resetting retry counter."
+        ffmpeg_retry_count=0
+    fi
+
+    if [ "$FFMPEG_EXIT" -eq 0 ]; then
+        log "[FFMPEG SUCCESS] Process exited cleanly with exit code 0."
+        break
+    fi
+
+    if [ $ffmpeg_retry_count -lt $MAX_FFMPEG_RETRIES ]; then
+        log "[FFMPEG RETRY] Transient failure detected (code ${FFMPEG_EXIT}, runtime ${runtime}s). Retrying in 2 seconds..."
+        sleep 2
+    else
+        log "[FFMPEG FATAL] FFmpeg failed ${MAX_FFMPEG_RETRIES} consecutive times. Exiting transcoder."
+        exit $FFMPEG_EXIT
+    fi
+done
+

@@ -197,7 +197,35 @@ async function startServer() {
     console.error('[Server Boot] Error resetting streams on startup:', e);
   }
 
+  interface RtmpSession {
+    clientId: string;
+    sessionId: string;
+    startTime: number;
+  }
+  // Track active RTMP client connection sessions to prevent stale publish_done race conditions on reconnect
+  const activeStreamClients = new Map<string, RtmpSession>();
+  const pendingCleanups = new Map<string, NodeJS.Timeout>();
+
   const hlsStaticMiddleware = express.static(hlsPath, {
+    etag: false,
+    lastModified: false,
+    setHeaders: (res, filePath) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0, s-maxage=0');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      if (filePath.endsWith('.m3u8')) {
+        res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+      } else if (filePath.endsWith('.ts')) {
+        res.setHeader('Content-Type', 'video/mp2t');
+      } else if (filePath.endsWith('.m4s') || filePath.endsWith('.mp4')) {
+        res.setHeader('Content-Type', 'video/mp4');
+      } else if (filePath.endsWith('.mpd')) {
+        res.setHeader('Content-Type', 'application/dash+xml');
+      }
+    }
+  });
+
+  const vpsHlsStaticMiddleware = express.static(vpsHlsPath, {
     etag: false,
     lastModified: false,
     setHeaders: (res, filePath) => {
@@ -235,13 +263,16 @@ async function startServer() {
     if (streamKey) {
       try {
         const stream = await db.getStreamByKey(streamKey);
-        // Requirement 3: Stream MUST be LIVE in DB to serve HLS
-        if (!stream || stream.status !== 'live') {
+        const hasActiveSession = activeStreamClients.has(streamKey);
+
+        // Allow HLS serving if stream is 'live' OR active RTMP publisher session is registered
+        if ((!stream || stream.status !== 'live') && !hasActiveSession) {
           return res.status(404).send('Stream Offline');
         }
 
-        // Requirement 5: Reject playlists older than 10 seconds
-        if (req.path.endsWith('.m3u8')) {
+        // Master manifest (master.m3u8) is static and MUST NEVER be rejected for age.
+        // Variant playlists (index.m3u8) are updated dynamically by FFmpeg.
+        if (req.path.endsWith('.m3u8') && !req.path.endsWith('master.m3u8')) {
           const localFilePath = path.join(hlsPath, req.path);
           const vpsFilePath = path.join(vpsHlsPath, req.path);
           const targetPath = fs.existsSync(localFilePath) ? localFilePath : (fs.existsSync(vpsFilePath) ? vpsFilePath : null);
@@ -252,8 +283,8 @@ async function startServer() {
 
           const stats = fs.statSync(targetPath);
           const ageMs = Date.now() - stats.mtimeMs;
-          if (ageMs > 20000) {
-            console.log(`[HLS Middleware] Rejecting stale playlist for key "${streamKey}" (age: ${(ageMs / 1000).toFixed(1)}s > 20s)`);
+          if (ageMs > 30000 && !hasActiveSession) {
+            console.log(`[HLS Middleware] Rejecting stale variant playlist for key "${streamKey}" (age: ${(ageMs / 1000).toFixed(1)}s > 30s)`);
             return res.status(404).send('HLS Playlist Stale');
           }
         }
@@ -263,7 +294,7 @@ async function startServer() {
     }
 
     next();
-  }, hlsStaticMiddleware, (req, res) => {
+  }, hlsStaticMiddleware, vpsHlsStaticMiddleware, (req, res) => {
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0, s-maxage=0');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
@@ -3401,14 +3432,6 @@ async function startServer() {
   // ----------------------------------------------------
   // RTMP PUBLISHER SESSION MANAGEMENT & ANTI-RACE HANDLERS
   // ----------------------------------------------------
-  interface RtmpSession {
-    clientId: string;
-    sessionId: string;
-    startTime: number;
-  }
-  // Track active RTMP client connection sessions to prevent stale publish_done race conditions on reconnect
-  const activeStreamClients = new Map<string, RtmpSession>();
-  const pendingCleanups = new Map<string, NodeJS.Timeout>();
 
   // RTMP Ingest Validation HTTP Callback (Nginx RTMP on_publish)
   app.post('/api/rtmp/publish', async (req, res) => {

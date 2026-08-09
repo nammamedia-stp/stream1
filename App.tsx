@@ -448,7 +448,7 @@ CREATE TABLE IF NOT EXISTS streams (
     localStorage.setItem('streampulse_deployment_mode', deploymentMode);
   }, [deploymentMode]);
 
-  const fetchWithNetworkHeaders = useCallback(async (url: string, init?: RequestInit) => {
+  const fetchWithNetworkHeaders = useCallback(async (url: string, init?: RequestInit, retries = 2): Promise<Response> => {
     const headers = new Headers(init?.headers);
     if (token) {
       headers.set('Authorization', `Bearer ${token}`);
@@ -462,10 +462,19 @@ CREATE TABLE IF NOT EXISTS streams (
     if (deploymentMode) {
       headers.set('x-deployment-mode', deploymentMode);
     }
-    return fetch(url, {
-      ...init,
-      headers
-    });
+
+    try {
+      return await fetch(url, {
+        ...init,
+        headers
+      });
+    } catch (err) {
+      if (retries > 0) {
+        await new Promise(r => setTimeout(r, 400));
+        return fetchWithNetworkHeaders(url, init, retries - 1);
+      }
+      throw err;
+    }
   }, [token, customDomain, manualIp, deploymentMode]);
 
   const MIN_SCHEDULE_DATE = '2026-01-01';
@@ -590,9 +599,11 @@ CREATE TABLE IF NOT EXISTS streams (
         throw new Error(`HTTP error! status: ${res.status}`);
       }
       const data = await safeParseJson(res);
-      setStreams(data);
-    } catch (err) {
-      console.error('Error fetching streams:', err);
+      if (Array.isArray(data)) {
+        setStreams(data);
+      }
+    } catch (err: any) {
+      console.warn('Network notice while fetching streams:', err?.message || err);
     }
   }, [token, fetchWithNetworkHeaders, handleLogout]);
 
@@ -745,8 +756,8 @@ CREATE TABLE IF NOT EXISTS streams (
       }
       const data = await safeParseJson(res);
       setStats(data);
-    } catch (err) {
-      console.error('Error fetching server stats:', err);
+    } catch (err: any) {
+      console.warn('Network notice while fetching server stats:', err?.message || err);
     }
   }, [token, currentUser, fetchWithNetworkHeaders, handleLogout]);
 
@@ -766,8 +777,8 @@ CREATE TABLE IF NOT EXISTS streams (
       }
       const data = await safeParseJson(res);
       setActionLogs(data);
-    } catch (err) {
-      console.error('Error fetching logs:', err);
+    } catch (err: any) {
+      console.warn('Network notice while fetching logs:', err?.message || err);
     }
   }, [token, fetchWithNetworkHeaders, handleLogout]);
 
@@ -797,8 +808,8 @@ CREATE TABLE IF NOT EXISTS streams (
       } else {
         setDetectedLanIp('Not available');
       }
-    } catch (err) {
-      console.error('Error fetching network details:', err);
+    } catch (err: any) {
+      console.warn('Network notice while fetching network details:', err?.message || err);
     }
   }, [token, fetchWithNetworkHeaders, handleLogout]);
 

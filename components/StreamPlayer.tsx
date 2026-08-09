@@ -1285,7 +1285,10 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       }
     };
 
-    reconnectTimerRef.current = setInterval(pollForManifest, 1000);
+    pollForManifest();
+    if (isPollingRef.current) {
+      reconnectTimerRef.current = setInterval(pollForManifest, 1000);
+    }
   };
 
   const createAndAttachHlsInstance = (HlsClass: any, baseUrl: string, sessionId: number) => {
@@ -1500,20 +1503,17 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
               const checkRes = await fetch(cacheBustUrl, { method: 'GET', cache: 'no-store' });
               if (!checkRes.ok) {
                 console.warn(`[StreamPlayer Engine] Manifest check returned HTTP ${checkRes.status}, stream is starting up/reconnecting. Starting reconnect engine...`);
-                cleanupAndResetPlayer('manifest_fetch_pending');
                 startReconnectEngine(Hls, 'manifest_check_404');
                 return;
               }
               const text = await checkRes.text();
               if (!text || !text.includes('#EXTM3U')) {
                 console.warn('[StreamPlayer Engine] Manifest content incomplete/missing #EXTM3U header. Starting reconnect engine...');
-                cleanupAndResetPlayer('manifest_incomplete_pending');
                 startReconnectEngine(Hls, 'manifest_check_incomplete');
                 return;
               }
             } catch (err) {
               console.warn('[StreamPlayer Engine] Manifest check network error, starting reconnect engine...');
-              cleanupAndResetPlayer('manifest_network_pending');
               startReconnectEngine(Hls, 'manifest_check_network_error');
               return;
             }
@@ -1612,6 +1612,31 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
     return () => clearInterval(watchdogTimer);
   }, [isPlaying, stream.status, hlsUrl, onGoLive]);
+
+  // Page visibility restoration effect: resumes playback or starts reconnect engine if stream is live upon returning to tab
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && stream.status === 'live' && isPlaying) {
+        const video = videoRef.current;
+        if (video) {
+          if (video.paused && !isRecoveringRef.current && !isPollingRef.current) {
+            console.log('[StreamPlayer Visibility] Tab became visible, resuming playback...');
+            safePlayVideo(video);
+          }
+          if (video.error && !isRecoveringRef.current && !isPollingRef.current) {
+            console.warn('[StreamPlayer Visibility] Tab became visible with video error, triggering reconnect...');
+            const Hls = (window as any).Hls;
+            if (Hls && Hls.isSupported()) {
+              startReconnectEngine(Hls, 'visibility_change_video_error');
+            }
+          }
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [isPlaying, stream.status]);
 
   // Adjust volume dynamically
   useEffect(() => {

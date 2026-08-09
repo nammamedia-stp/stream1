@@ -1149,6 +1149,9 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
   const isRecoveringRef = useRef<boolean>(false);
   const isPollingRef = useRef<boolean>(false);
   const reconnectTimerRef = useRef<any>(null);
+  const stallDetectorTimerRef = useRef<any>(null);
+  const lastPlaybackTimeRef = useRef<number>(0);
+  const lastPlaybackTimeUpdateRef = useRef<number>(Date.now());
   const videoListenersRef = useRef<Array<{ type: string; fn: any }>>([]);
 
   // Helper to safely execute play with muted fallback if browser blocks unmuted play (NEVER set volume state to 0)
@@ -1198,6 +1201,11 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       reconnectTimerRef.current = null;
     }
 
+    if (stallDetectorTimerRef.current) {
+      clearInterval(stallDetectorTimerRef.current);
+      stallDetectorTimerRef.current = null;
+    }
+
     const video = videoRef.current;
     if (video && videoListenersRef.current.length > 0) {
       videoListenersRef.current.forEach(({ type, fn }) => {
@@ -1236,13 +1244,15 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
   // Single-Flight Preflight Poll Loop: Sequentially validates master manifest, variant playlist, and segment reachability before attaching Hls.js
   const runSingleFlightPollLoop = async (sessionForReconnect: number, HlsTarget: any) => {
-    console.log(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionForReconnect}] [state=POLLING] Starting single-flight preflight loop...`);
+    console.log(`[HLS_RECOVERY] [sessionId=${sessionForReconnect}] Starting single-flight recovery poll loop...`);
 
     while (isPollingRef.current && sessionForReconnect === playbackSessionIdRef.current) {
       const now = Date.now();
+      console.log('[HLS_RECOVERY] checking stream availability');
+
       try {
-        // Step A: Check master manifest with bounded timeout (1500ms)
-        const freshManifestUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${now}`;
+        // Step A: Check master manifest with bounded timeout (1500ms) and cache-busting
+        const freshManifestUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}?_t=${now}`;
         const masterController = new AbortController();
         const masterTimeout = setTimeout(() => masterController.abort(), 1500);
 
@@ -1262,7 +1272,6 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
         if (masterRes && masterRes.ok && isPollingRef.current && sessionForReconnect === playbackSessionIdRef.current) {
           const masterText = await masterRes.text();
           if (masterText && masterText.includes('#EXTM3U')) {
-            console.log(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionForReconnect}] [state=MASTER_READY] Master manifest verified.`);
 
             // Step B: Determine variant playlist URL (extract relative path or fallback to Original/index.m3u8)
             let variantRelPath = 'Original/index.m3u8';
@@ -1277,8 +1286,8 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
             const variantBase = freshManifestUrl.substring(0, freshManifestUrl.lastIndexOf('/') + 1);
             const variantUrl = variantRelPath.startsWith('http')
-              ? `${variantRelPath}${variantRelPath.includes('?') ? '&' : '?'}t=${now}`
-              : `${variantBase}${variantRelPath}${variantRelPath.includes('?') ? '&' : '?'}t=${now}`;
+              ? `${variantRelPath}${variantRelPath.includes('?') ? '&' : '?'}?_t=${now}`
+              : `${variantBase}${variantRelPath}${variantRelPath.includes('?') ? '&' : '?'}?_t=${now}`;
 
             const variantController = new AbortController();
             const variantTimeout = setTimeout(() => variantController.abort(), 1500);
@@ -1298,8 +1307,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
             if (variantRes && variantRes.ok && isPollingRef.current && sessionForReconnect === playbackSessionIdRef.current) {
               const variantText = await variantRes.text();
-              if (variantText && variantText.includes('#EXTM3U') && variantText.includes('#EXTINF')) {
-                console.log(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionForReconnect}] [state=VARIANT_READY] Variant playlist verified.`);
+              if (variantText && variantText.includes('#EXTM3U') && (variantText.includes('#EXTINF') || variantText.includes('.ts'))) {
 
                 // Step C: Extract newest active .ts media segment name
                 const lines = variantText.split('\n');
@@ -1315,10 +1323,10 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
                 if (segmentFileName) {
                   const variantBaseDir = variantUrl.substring(0, variantUrl.lastIndexOf('/') + 1);
                   const segmentUrl = segmentFileName.startsWith('http')
-                    ? `${segmentFileName}${segmentFileName.includes('?') ? '&' : '?'}t=${now}`
-                    : `${variantBaseDir}${segmentFileName}${segmentFileName.includes('?') ? '&' : '?'}t=${now}`;
+                    ? `${segmentFileName}${segmentFileName.includes('?') ? '&' : '?'}?_t=${now}`
+                    : `${variantBaseDir}${segmentFileName}${segmentFileName.includes('?') ? '&' : '?'}?_t=${now}`;
 
-                  // Step D: Preflight check segment availability with simple GET fetch & 1500ms timeout
+                  // Step D: Preflight check segment availability
                   let segmentOk = false;
                   const segController = new AbortController();
                   const segTimeout = setTimeout(() => segController.abort(), 1500);
@@ -1339,13 +1347,10 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
                   }
 
                   if (segmentOk && isPollingRef.current && sessionForReconnect === playbackSessionIdRef.current) {
-                    console.log(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionForReconnect}] [state=SEGMENT_READY] Segment verified: ${segmentFileName}. Attaching Hls.js!`);
-                    
+                    console.log('[HLS_RECOVERY] stream available, reloading player');
                     isPollingRef.current = false;
                     createAndAttachHlsInstance(HlsTarget, hlsUrl, sessionForReconnect);
                     return; // Deterministic exit
-                  } else {
-                    console.log(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionForReconnect}] Segment ${segmentFileName} not ready yet. Retrying in 500ms...`);
                   }
                 }
               }
@@ -1353,12 +1358,13 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
           }
         }
       } catch (e) {
-        // Stream still offline/reconnecting, retry
+        // Stream still offline/reconnecting
       }
 
-      // Wait 500ms before next attempt (deterministic single-flight delay)
+      // If stream is unavailable, log and wait 2000ms before retrying
       if (isPollingRef.current && sessionForReconnect === playbackSessionIdRef.current) {
-        await new Promise((r) => setTimeout(r, 500));
+        console.log('[HLS_RECOVERY] stream unavailable, retrying in 2000ms');
+        await new Promise((r) => setTimeout(r, 2000));
       }
     }
   };
@@ -1367,13 +1373,21 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
   const startReconnectEngine = (HlsClass: any, reason: string = 'unspecified') => {
     const HlsTarget = HlsClass || (typeof window !== 'undefined' ? (window as any).Hls : null);
     if (!HlsTarget) {
-      console.warn(`[StreamPlayer Diagnostics] [t=${Date.now()}] Hls library not available for reconnect engine (reason: ${reason}).`);
+      console.warn(`[StreamPlayer Diagnostics] Hls library not available for reconnect engine (reason: ${reason}).`);
       return;
     }
 
     if (isPollingRef.current) {
-      console.log(`[StreamPlayer Diagnostics] [t=${Date.now()}] Already reconnecting/polling (reason: ${reason}), skipping duplicate call.`);
+      console.log('[HLS_RECOVERY] already checking stream availability');
       return;
+    }
+
+    if (reason.includes('network') || reason.includes('fatal')) {
+      console.log('[HLS_RECOVERY] detected fatal network error');
+    } else if (reason.includes('stall')) {
+      console.log('[HLS_RECOVERY] detected playback stall');
+    } else {
+      console.log(`[HLS_RECOVERY] starting reconnect engine (reason: ${reason})`);
     }
 
     cleanupAndResetPlayer(`reconnect_start_${reason}`);
@@ -1382,15 +1396,13 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     setIsReconnectingUI(true);
 
     const sessionForReconnect = playbackSessionIdRef.current;
-    console.log(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionForReconnect}] [state=RECONNECTING] Started reconnect engine (reason: ${reason})`);
-
     runSingleFlightPollLoop(sessionForReconnect, HlsTarget);
   };
 
   const createAndAttachHlsInstance = (HlsClass: any, baseUrl: string, sessionId: number) => {
     const video = videoRef.current;
     if (!video || sessionId !== playbackSessionIdRef.current) {
-      console.log(`[StreamPlayer Diagnostics] [t=${Date.now()}] Aborting instance creation: video ref=${!!video}, sessionId match=${sessionId === playbackSessionIdRef.current}`);
+      console.log(`[StreamPlayer Diagnostics] Aborting instance creation: video ref=${!!video}, sessionId match=${sessionId === playbackSessionIdRef.current}`);
       return;
     }
 
@@ -1405,10 +1417,9 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
     resetVideoElement(video);
 
-    console.log(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionId}] Creating new Hls instance...`);
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
-    // Custom loader subclass that appends cache-busting timestamp to ALL Hls.js network requests (master, level playlists, fragments)
+    // Custom loader subclass that appends cache-busting timestamp to ALL Hls.js network requests
     const createCacheBustingLoader = (HlsTargetClass: any) => {
       const BaseLoader = HlsTargetClass?.DefaultConfig?.loader || HlsTargetClass?.DefaultConfig?.fLoader;
       if (!BaseLoader) return null;
@@ -1451,7 +1462,6 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
         xhr.setRequestHeader('Pragma', 'no-cache');
         xhr.setRequestHeader('Expires', '0');
       },
-      // Fast error discovery & recovery: 2 retries max at 300ms intervals to eliminate 15s+ backoff stalls
       manifestLoadingMaxRetry: 2,
       manifestLoadingRetryDelay: 300,
       manifestLoadingMaxRetryTimeout: 1000,
@@ -1468,7 +1478,6 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     }
 
     const hls = new HlsClass(hlsConfig);
-
     hlsInstanceRef.current = hls;
 
     let autoplayTriggered = false;
@@ -1476,15 +1485,14 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     // STEP 1: Register MEDIA_ATTACHED handler BEFORE calling attachMedia()
     hls.on(HlsClass.Events.MEDIA_ATTACHED, () => {
       if (sessionId !== playbackSessionIdRef.current) return;
-      const freshManifestUrl = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
-      console.log(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionId}] MEDIA_ATTACHED confirmed. Loading fresh source: ${freshManifestUrl}`);
+      const freshManifestUrl = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}?_t=${Date.now()}`;
+      console.log(`[StreamPlayer Engine] MEDIA_ATTACHED confirmed. Loading source: ${freshManifestUrl}`);
       hls.loadSource(freshManifestUrl);
     });
 
     // STEP 2: Handle MANIFEST_PARSED
     hls.on(HlsClass.Events.MANIFEST_PARSED, (event: any, data: any) => {
       if (sessionId !== playbackSessionIdRef.current) return;
-      console.log(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionId}] MANIFEST_PARSED`);
       hls.currentLevel = -1;
 
       if (isMobile && data.levels && data.levels.length > 1) {
@@ -1502,7 +1510,6 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       setQualityLevels(['Auto', ...uniqueLevels]);
 
       if (video && video.paused) {
-        console.log(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionId}] MANIFEST_PARSED triggering safePlayVideo...`);
         safePlayVideo(video);
       }
     });
@@ -1510,7 +1517,6 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     hls.on(HlsClass.Events.LEVEL_LOADED, () => {
       if (sessionId !== playbackSessionIdRef.current) return;
       if (video && video.paused && stream.status === 'live' && !isPollingRef.current && video.readyState >= 2) {
-        console.log(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionId}] LEVEL_LOADED auto-resuming paused video...`);
         safePlayVideo(video);
       }
     });
@@ -1518,7 +1524,6 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     hls.on(HlsClass.Events.BUFFER_APPENDED, () => {
       if (sessionId !== playbackSessionIdRef.current) return;
       if (video && video.paused && stream.status === 'live' && !isPollingRef.current) {
-        console.log(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionId}] BUFFER_APPENDED auto-resuming paused video...`);
         safePlayVideo(video);
       }
     });
@@ -1526,17 +1531,13 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     // STEP 3: Wait for first FRAG_BUFFERED before triggering autoplay
     hls.on(HlsClass.Events.FRAG_BUFFERED, () => {
       if (sessionId !== playbackSessionIdRef.current) return;
-      
+
       isPollingRef.current = false;
       setIsReconnectingUI(false);
-      if (reconnectTimerRef.current) {
-        clearInterval(reconnectTimerRef.current);
-        reconnectTimerRef.current = null;
-      }
+      console.log('[HLS_RECOVERY] playback resumed');
 
       if (!autoplayTriggered || video.paused) {
         autoplayTriggered = true;
-        console.log(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionId}] FRAG_BUFFERED received. Transition to PLAYING complete! Triggering play...`);
         safePlayVideo(video);
       }
     });
@@ -1544,25 +1545,24 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     // STEP 4: Handle Errors
     hls.on(HlsClass.Events.ERROR, (event: any, data: any) => {
       if (sessionId !== playbackSessionIdRef.current) return;
-      console.warn(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionId}] HLS Error (type: ${data.type}, details: ${data.details}, fatal: ${data.fatal})`);
 
       if (data.fatal) {
         switch (data.type) {
           case HlsClass.ErrorTypes.MEDIA_ERROR:
-            console.warn(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionId}] Fatal media error. Attempting recoverMediaError...`);
+            console.warn('[HLS_RECOVERY] detected fatal media error, attempting recoverMediaError');
             try {
               hls.recoverMediaError();
             } catch (e) {
-              console.error(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionId}] recoverMediaError failed, starting reconnect engine:`, e);
+              console.error('[HLS_RECOVERY] recoverMediaError failed, starting reconnect engine:', e);
               startReconnectEngine(HlsClass, 'fatal_media_error_recover_failed');
             }
             break;
           case HlsClass.ErrorTypes.NETWORK_ERROR:
-            console.warn(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionId}] Fatal network error. Starting reconnect engine...`);
+            console.log('[HLS_RECOVERY] detected fatal network error');
             startReconnectEngine(HlsClass, 'fatal_network_error');
             break;
           default:
-            console.error(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionId}] Unrecoverable fatal error. Starting reconnect engine...`);
+            console.log(`[HLS_RECOVERY] detected fatal error: ${data.details}`);
             startReconnectEngine(HlsClass, `fatal_error_${data.details}`);
             break;
         }
@@ -1570,10 +1570,28 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     });
 
     // STEP 5: Attach Media to Video Element AFTER listeners are registered
-    console.log(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionId}] Attaching media to video element...`);
     hls.attachMedia(video);
 
-    // Video Event Listeners
+    // Video Event Listeners & Stall Detector
+    lastPlaybackTimeRef.current = video.currentTime;
+    lastPlaybackTimeUpdateRef.current = Date.now();
+
+    const handleVideoPlaying = () => {
+      if (sessionId !== playbackSessionIdRef.current) return;
+      isPollingRef.current = false;
+      setIsReconnectingUI(false);
+      lastPlaybackTimeUpdateRef.current = Date.now();
+      console.log('[HLS_RECOVERY] playback resumed');
+    };
+
+    const handleTimeUpdate = () => {
+      if (sessionId !== playbackSessionIdRef.current) return;
+      if (video.currentTime !== lastPlaybackTimeRef.current) {
+        lastPlaybackTimeRef.current = video.currentTime;
+        lastPlaybackTimeUpdateRef.current = Date.now();
+      }
+    };
+
     const handleVideoCanPlay = () => {
       if (sessionId !== playbackSessionIdRef.current) return;
       if (video.paused && stream.status === 'live' && autoplayTriggered) {
@@ -1584,17 +1602,34 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     const handleVideoError = (e: any) => {
       if (sessionId !== playbackSessionIdRef.current) return;
       if (isPollingRef.current) return;
-      console.warn(`[StreamPlayer Diagnostics] [t=${Date.now()}] [sessionId=${sessionId}] Video element error (${e?.type}). Triggering reconnect engine...`);
+      console.log('[HLS_RECOVERY] detected video element error');
       startReconnectEngine(HlsClass, `video_${e?.type || 'error'}`);
     };
 
     const listeners = [
+      { type: 'playing', fn: handleVideoPlaying },
+      { type: 'timeupdate', fn: handleTimeUpdate },
       { type: 'canplay', fn: handleVideoCanPlay },
       { type: 'error', fn: handleVideoError },
     ];
 
     videoListenersRef.current = listeners;
     listeners.forEach(({ type, fn }) => video.addEventListener(type, fn));
+
+    // Stall Watchdog Interval: Checks if currentTime is stuck for >4s while stream is live
+    if (stallDetectorTimerRef.current) {
+      clearInterval(stallDetectorTimerRef.current);
+    }
+    stallDetectorTimerRef.current = setInterval(() => {
+      if (sessionId !== playbackSessionIdRef.current) return;
+      if (stream.status === 'live' && !video.paused && !video.ended && !isPollingRef.current) {
+        const stalledDuration = Date.now() - lastPlaybackTimeUpdateRef.current;
+        if (stalledDuration > 4000) {
+          console.log('[HLS_RECOVERY] detected playback stall');
+          startReconnectEngine(HlsClass, 'playback_stall');
+        }
+      }
+    }, 1000);
   };
 
   // Interactive Player Lifecycle effect (instantiates Hls.js or Dash.js on the <video> target)

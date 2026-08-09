@@ -657,21 +657,25 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
 
         hlsInstance.on(Hls.Events.ERROR, function(event, data) {
           if (data.fatal) {
-            console.warn('[RPi Player] HLS.js fatal error:', data.type);
+            console.warn('[HLS_RECOVERY] detected fatal error:', data.type);
             isPlaying = false;
             updateStatus('reconnecting', 'Stream Offline • Reconnecting...', '');
             
             switch (data.type) {
               case Hls.ErrorTypes.NETWORK_ERROR:
-                console.log('[RPi Player] Network error encountered. Retrying in ' + (RECONNECT_INTERVAL / 1000) + 's...');
-                setTimeout(() => { pollAndReconnect(); }, RECONNECT_INTERVAL);
+                console.log('[HLS_RECOVERY] detected fatal network error');
+                pollAndReconnect();
                 break;
               case Hls.ErrorTypes.MEDIA_ERROR:
-                console.log('[RPi Player] Media decode error. Attempting buffer recovery...');
-                hlsInstance.recoverMediaError();
+                console.warn('[HLS_RECOVERY] detected fatal media error, attempting recoverMediaError');
+                try {
+                  hlsInstance.recoverMediaError();
+                } catch (e) {
+                  pollAndReconnect();
+                }
                 break;
               default:
-                initVideoJs();
+                pollAndReconnect();
                 break;
             }
           }
@@ -686,38 +690,47 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
           hlsInstance = null;
         }
 
-        videoEl.src = HLS_URL;
+        videoEl.src = HLS_URL + '?_t=' + Date.now();
         videoEl.play().then(() => {
           isPlaying = true;
           updateStatus('live', 'Live (Video.js)', fps + ' FPS');
         }).catch((err) => {
           isPlaying = false;
           updateStatus('reconnecting', 'Stream Offline • Reconnecting...', '');
-          setTimeout(pollAndReconnect, RECONNECT_INTERVAL);
+          setTimeout(pollAndReconnect, 2000);
         });
       }
 
       function pollAndReconnect() {
-        // Poll playlist URL to verify stream availability before reloading player engine
-        fetch(HLS_URL, { method: 'HEAD', cache: 'no-store' })
+        console.log('[HLS_RECOVERY] checking stream availability');
+        fetch(HLS_URL + '?_t=' + Date.now(), { method: 'GET', cache: 'no-store' })
           .then(res => {
             if (res.ok) {
-              console.log('[RPi Player] Stream endpoint online! Re-booting HLS playback.');
+              return res.text();
+            }
+            throw new Error('Unavailable');
+          })
+          .then(text => {
+            if (text && text.includes('#EXTM3U')) {
+              console.log('[HLS_RECOVERY] stream available, reloading player');
               initHlsJs();
             } else {
+              console.log('[HLS_RECOVERY] stream unavailable, retrying in 2000ms');
               updateStatus('reconnecting', 'Stream Offline • Polling...', '');
-              setTimeout(pollAndReconnect, RECONNECT_INTERVAL);
+              setTimeout(pollAndReconnect, 2000);
             }
           })
           .catch(() => {
+            console.log('[HLS_RECOVERY] stream unavailable, retrying in 2000ms');
             updateStatus('reconnecting', 'Network Offline • Retrying...', '');
-            setTimeout(pollAndReconnect, RECONNECT_INTERVAL);
+            setTimeout(pollAndReconnect, 2000);
           });
       }
 
       // Event listeners on video element
       videoEl.addEventListener('playing', () => {
         isPlaying = true;
+        console.log('[HLS_RECOVERY] playback resumed');
         updateStatus('live', 'Live • ' + (videoEl.videoHeight || 1080) + 'p', fps + ' FPS');
       });
 

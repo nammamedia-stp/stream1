@@ -1236,6 +1236,12 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
   // Single Reconnect Engine: Polls for manifest and reinstantiates player when manifest becomes available
   const startReconnectEngine = (HlsClass: any, reason: string = 'unspecified') => {
+    const HlsTarget = HlsClass || (typeof window !== 'undefined' ? (window as any).Hls : null);
+    if (!HlsTarget) {
+      console.warn(`[StreamPlayer Reconnect] Hls library not available for reconnect engine (reason: ${reason}).`);
+      return;
+    }
+
     if (isPollingRef.current) {
       console.log(`[StreamPlayer Reconnect] Already reconnecting/polling (reason: ${reason}), skipping duplicate call.`);
       return;
@@ -1271,7 +1277,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
               reconnectTimerRef.current = null;
             }
             isPollingRef.current = false;
-            createAndAttachHlsInstance(HlsClass, hlsUrl, sessionForReconnect);
+            createAndAttachHlsInstance(HlsTarget, hlsUrl, sessionForReconnect);
           }
         }
       } catch (e) {
@@ -1496,6 +1502,13 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
                 console.warn(`[StreamPlayer Engine] Manifest check returned HTTP ${checkRes.status}, stream is starting up/reconnecting. Starting reconnect engine...`);
                 cleanupAndResetPlayer('manifest_fetch_pending');
                 startReconnectEngine(Hls, 'manifest_check_404');
+                return;
+              }
+              const text = await checkRes.text();
+              if (!text || !text.includes('#EXTM3U')) {
+                console.warn('[StreamPlayer Engine] Manifest content incomplete/missing #EXTM3U header. Starting reconnect engine...');
+                cleanupAndResetPlayer('manifest_incomplete_pending');
+                startReconnectEngine(Hls, 'manifest_check_incomplete');
                 return;
               }
             } catch (err) {

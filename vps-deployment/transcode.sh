@@ -239,25 +239,28 @@ variants.forEach(v => {
   }
 });
 
-// Construct FFmpeg filter graph (only for transcoded variants, bypassing stream-copy / Original)
-const transcodedItems = variants.map((v, i) => {
-  const isCopy = !!(v.isOriginal || v.videoCodec === 'copy' || v.name === 'Original' || v.name === 'Source (Original)' || v.width === 0 || v.height === 0);
-  return { v, i, isCopy };
-}).filter(x => !x.isCopy);
-
+// Construct FFmpeg filter graph (all variants re-encoded with libx264 to guarantee fixed 2s GOP keyframe intervals)
 let filterParts = [];
-if (transcodedItems.length === 1) {
-  const item = transcodedItems[0];
-  filterParts.push(`[0:v:0]scale=w=${item.v.width}:h=${item.v.height}:force_original_aspect_ratio=decrease:flags=bicubic,pad=${item.v.width}:${item.v.height}:(ow-iw)/2:(oh-ih)/2,format=yuv420p[v${item.i}]`);
-} else if (transcodedItems.length > 1) {
-  let splitStr = `[0:v:0]split=${transcodedItems.length}`;
-  for (let idx = 0; idx < transcodedItems.length; idx++) {
+if (variants.length === 1) {
+  const v = variants[0];
+  if (v.width > 0 && v.height > 0) {
+    filterParts.push(`[0:v:0]scale=w=${v.width}:h=${v.height}:force_original_aspect_ratio=decrease:flags=bicubic,pad=${v.width}:${v.height}:(ow-iw)/2:(oh-ih)/2,format=yuv420p[v0]`);
+  } else {
+    filterParts.push(`[0:v:0]format=yuv420p[v0]`);
+  }
+} else if (variants.length > 1) {
+  let splitStr = `[0:v:0]split=${variants.length}`;
+  for (let idx = 0; idx < variants.length; idx++) {
     splitStr += `[vin${idx}]`;
   }
   filterParts.push(splitStr);
 
-  transcodedItems.forEach((item, idx) => {
-    filterParts.push(`[vin${idx}]scale=w=${item.v.width}:h=${item.v.height}:force_original_aspect_ratio=decrease:flags=bicubic,pad=${item.v.width}:${item.v.height}:(ow-iw)/2:(oh-ih)/2,format=yuv420p[v${item.i}]`);
+  variants.forEach((v, idx) => {
+    if (v.width > 0 && v.height > 0) {
+      filterParts.push(`[vin${idx}]scale=w=${v.width}:h=${v.height}:force_original_aspect_ratio=decrease:flags=bicubic,pad=${v.width}:${v.height}:(ow-iw)/2:(oh-ih)/2,format=yuv420p[v${idx}]`);
+    } else {
+      filterParts.push(`[vin${idx}]format=yuv420p[v${idx}]`);
+    }
   });
 }
 
@@ -279,56 +282,43 @@ if (filterParts.length > 0) {
 let varStreamMapParts = [];
 
 variants.forEach((v, i) => {
-  const isCopy = !!(v.isOriginal || v.videoCodec === 'copy' || v.name === 'Original' || v.name === 'Source (Original)' || v.width === 0 || v.height === 0);
   const preset = v.encoderPreset || 'superfast';
 
   let bv = v.bitrate;
   if (!bv || bv === '0k' || bv === '0') {
-    bv = isCopy ? '0k' : '2500k';
+    bv = '3500k';
   }
   let maxrate = v.maxBitrate;
   if (!maxrate || maxrate === '0k' || maxrate === '0') {
-    maxrate = isCopy ? '0k' : '2875k';
+    maxrate = '4000k';
   }
   let bufsize = v.bufferSize;
   if (!bufsize || bufsize === '0k' || bufsize === '0') {
-    bufsize = isCopy ? '0k' : '4000k';
-  }
-  let ba = v.audioBitrate;
-  if (!ba || ba === '0k' || ba === '0') {
-    ba = isCopy ? '0k' : '128k';
+    bufsize = '6000k';
   }
 
-  if (isCopy) {
-    args.push('-map', '0:v:0', `-c:v:${i}`, 'copy');
-    if (hasAudio) {
-      args.push('-map', '0:a:0?', `-c:a:${i}`, 'copy');
-    }
-  } else {
+  args.push(
+    '-map', `"[v${i}]"`,
+    `-c:v:${i}`, 'libx264',
+    `-preset:v:${i}`, preset,
+    `-profile:v:${i}`, 'main',
+    `-level:v:${i}`, '4.1',
+    `-pix_fmt:v:${i}`, 'yuv420p',
+    `-b:v:${i}`, bv,
+    `-maxrate:v:${i}`, maxrate,
+    `-bufsize:v:${i}`, bufsize,
+    `-g:v:${i}`, '60',
+    `-keyint_min:v:${i}`, '60',
+    `-sc_threshold:v:${i}`, '0'
+  );
+
+  if (hasAudio) {
     args.push(
-      '-map', `"[v${i}]"`,
-      `-c:v:${i}`, 'libx264',
-      `-preset:v:${i}`, preset,
-      `-profile:v:${i}`, 'main',
-      `-level:v:${i}`, '4.1',
-      `-pix_fmt:v:${i}`, 'yuv420p',
-      `-b:v:${i}`, bv,
-      `-maxrate:v:${i}`, maxrate,
-      `-bufsize:v:${i}`, bufsize,
-      `-g:v:${i}`, '60',
-      `-keyint_min:v:${i}`, '60',
-      `-sc_threshold:v:${i}`, '0'
+      '-map', '0:a:0?',
+      `-c:a:${i}`, 'copy'
     );
-    if (hasAudio) {
-      args.push(
-        '-map', '0:a:0?',
-        `-c:a:${i}`, 'aac',
-        `-b:a:${i}`, ba,
-        `-ac:a:${i}`, '2',
-        `-ar:a:${i}`, '44100'
-      );
-    }
   }
+
   if (hasAudio) {
     varStreamMapParts.push(`v:${i},a:${i},name:${v.name}`);
   } else {

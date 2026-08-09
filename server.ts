@@ -3401,8 +3401,13 @@ async function startServer() {
   // ----------------------------------------------------
   // RTMP PUBLISHER SESSION MANAGEMENT & ANTI-RACE HANDLERS
   // ----------------------------------------------------
-  // Track active RTMP client connection IDs to prevent stale publish_done race conditions on reconnect
-  const activeStreamClients = new Map<string, string | number>();
+  interface RtmpSession {
+    clientId: string;
+    sessionId: string;
+    startTime: number;
+  }
+  // Track active RTMP client connection sessions to prevent stale publish_done race conditions on reconnect
+  const activeStreamClients = new Map<string, RtmpSession>();
   const pendingCleanups = new Map<string, NodeJS.Timeout>();
 
   // RTMP Ingest Validation HTTP Callback (Nginx RTMP on_publish)
@@ -3410,7 +3415,11 @@ async function startServer() {
     // Parse form body or query or json safely
     const streamKey = (req.body && (req.body.name || req.body.key || req.body.stream_key)) || req.query.name || req.query.key;
     const clientId = (req.body && (req.body.clientid || req.body.client_id)) || req.query.clientid;
-    console.log(`[RTMP Publish Callback] Key: "${streamKey}" (ClientID: ${clientId || 'unknown'})`);
+    const now = Date.now();
+    const strClientId = String(clientId || 'unknown');
+    const sessionId = `session_${now}_${Math.random().toString(36).substring(2, 9)}_${strClientId}`;
+
+    console.log(`[PUBLISH] [t=${now}] Key: "${streamKey}" | ClientID: "${strClientId}" | SessionID: "${sessionId}"`);
 
     if (!streamKey) {
       console.error(`[RTMP Publish Callback] Missing Stream Key`);
@@ -3418,25 +3427,35 @@ async function startServer() {
     }
 
     if (pendingCleanups.has(streamKey)) {
-      console.log(`[RTMP Publish Callback] Reconnect detected for stream key "${streamKey}". Cancelling pending HLS directory cleanup.`);
+      console.log(`[RTMP Publish Callback] [t=${now}] Reconnect detected for stream key "${streamKey}". Cancelling pending HLS directory cleanup.`);
       clearTimeout(pendingCleanups.get(streamKey)!);
       pendingCleanups.delete(streamKey);
     }
 
-    if (clientId) {
-      activeStreamClients.set(streamKey, clientId);
+    const previousSession = activeStreamClients.get(streamKey);
+    if (previousSession) {
+      console.log(`[RTMP Publish Callback] [t=${now}] Replacing active session ${previousSession.sessionId} (clientId: ${previousSession.clientId}) with new session ${sessionId} (clientId: ${strClientId})`);
     }
+
+    const newSession: RtmpSession = {
+      clientId: strClientId,
+      sessionId,
+      startTime: now
+    };
+    activeStreamClients.set(streamKey, newSession);
 
     try {
       const stream = await db.getStreamByKey(streamKey);
       if (!stream) {
         console.error(`[RTMP Publish Callback] Invalid key: "${streamKey}"`);
+        activeStreamClients.delete(streamKey);
         return res.status(404).send('Stream Key Not Found');
       }
 
       if (stream.status === 'disabled') {
         const reason = `Rejected connection. Stream "${stream.title}" has been disabled by the administrator.`;
         console.error(`[RTMP Publish Callback] Rejected: ${reason}`);
+        activeStreamClients.delete(streamKey);
         
         // Log rejection
         await logStreamAction(stream.id, stream.title, 'System/RTMP Ingest', 'disabled_reject', req.ip || '0.0.0.0', reason);
@@ -3444,7 +3463,7 @@ async function startServer() {
       }
 
       // Allow connection
-      console.log(`[RTMP Publish Callback] Accepted RTMP stream for key "${streamKey}". Title: "${stream.title}"`);
+      console.log(`[RTMP Publish Callback] [t=${now}] Accepted RTMP stream for key "${streamKey}". Title: "${stream.title}"`);
       
       // Clear pending delayed cleanups for this stream key if re-published
       if (pendingCleanups.has(streamKey)) {
@@ -3453,6 +3472,7 @@ async function startServer() {
       }
 
       // Remove stale HLS playlists from previous sessions to ensure clean startup state
+      console.log(`[HLS_CLEANUP] [t=${now}] [sessionId=${sessionId}] [clientId=${strClientId}] Clearing old HLS directory for fresh stream startup.`);
       const localStreamDir = path.resolve(`./data/hls/${streamKey}`);
       const vpsStreamDir = `/var/www/hls/${streamKey}`;
       if (fs.existsSync(localStreamDir)) { try { fs.rmSync(localStreamDir, { recursive: true, force: true }); } catch (e) {} }
@@ -3461,13 +3481,13 @@ async function startServer() {
       // Transition to 'live' in database
       await db.updateStream(stream.id, { 
         status: 'live',
-        startTime: new Date().toISOString()
+        startTime: new Date(now).toISOString()
       });
 
       const updatedStream = await db.getStreamByKey(streamKey);
       const augmented = updatedStream ? await augmentStreamWithPlayback(updatedStream, req) : null;
 
-      console.log(`[Stream Monitor] [State Transition] Stream "${stream.title}" (${streamKey}) -> LIVE via RTMP publish callback`);
+      console.log(`[STREAM_LIVE] [t=${now}] [sessionId=${sessionId}] [clientId=${strClientId}] Stream "${stream.title}" (${streamKey}) -> LIVE via RTMP publish callback`);
       broadcastToDashboards({
         type: 'stream_status_change',
         streamId: stream.id,
@@ -3492,33 +3512,43 @@ async function startServer() {
   app.post('/api/rtmp/publish_done', async (req, res) => {
     const streamKey = (req.body && (req.body.name || req.body.key || req.body.stream_key)) || req.query.name || req.query.key;
     const clientId = (req.body && (req.body.clientid || req.body.client_id)) || req.query.clientid;
-    console.log(`[RTMP Publish Done Callback] Key: "${streamKey}" (ClientID: ${clientId || 'unknown'})`);
+    const now = Date.now();
+    const strClientId = clientId ? String(clientId) : 'unknown';
+
+    console.log(`[UNPUBLISH] [t=${now}] Key: "${streamKey}" | ClientID: "${strClientId}"`);
 
     if (!streamKey) {
       console.error(`[RTMP Publish Done Callback] Missing Stream Key`);
       return res.status(400).send('Missing Stream Key');
     }
 
-    // Ignore stale publish_done calls if a newer publisher session has already connected or if clientId is missing while active
-    const activeClientId = activeStreamClients.get(streamKey);
-    if (activeClientId && (!clientId || String(activeClientId) !== String(clientId))) {
-      console.log(`[RTMP Publish Done Callback] Ignoring stale publish_done for key "${streamKey}" (disconnect client ${clientId || 'unknown'} != active client ${activeClientId})`);
+    const activeSession = activeStreamClients.get(streamKey);
+
+    // Strict Session Fence: Ignore stale publish_done if no active session or if disconnect clientId != active clientId
+    if (!activeSession) {
+      console.log(`[STALE_UNPUBLISH_IGNORED] [t=${now}] Key "${streamKey}" (disconnect client ${strClientId}). No active session registered. Ignoring publish_done.`);
       return res.status(200).send('OK');
     }
 
-    if (clientId && activeClientId && String(activeClientId) === String(clientId)) {
-      activeStreamClients.delete(streamKey);
+    if (clientId && activeSession.clientId !== strClientId) {
+      console.log(`[STALE_UNPUBLISH_IGNORED] [t=${now}] Key "${streamKey}" (disconnect client ${strClientId} != active client ${activeSession.clientId}, active session ${activeSession.sessionId}). Ignoring stale publish_done.`);
+      return res.status(200).send('OK');
+    }
+
+    // Valid disconnect for current active session
+    console.log(`[RTMP Publish Done Callback] [t=${now}] Valid publish_done for active session ${activeSession.sessionId} (clientId: ${activeSession.clientId}).`);
+    activeStreamClients.delete(streamKey);
+
+    // Double check if a NEW session published in the microsecond interval
+    if (activeStreamClients.has(streamKey)) {
+      const currentNewSession = activeStreamClients.get(streamKey);
+      console.log(`[RTMP Cleanup] [t=${now}] Aborting cleanup: New active session ${currentNewSession?.sessionId} already established for key "${streamKey}".`);
+      return res.status(200).send('OK');
     }
 
     try {
       const stream = await db.getStreamByKey(streamKey);
       if (stream) {
-        // Transition to 'offline' in database
-        await db.updateStream(stream.id, { 
-          status: 'offline',
-          viewers: 0
-        });
-
         // 1. Notify active transcoding process via SIGTERM if running
         const pidFile = `/tmp/ffmpeg_${streamKey}.pid`;
         if (fs.existsSync(pidFile)) {
@@ -3527,18 +3557,31 @@ async function startServer() {
             if (pidStr) {
               const pid = parseInt(pidStr, 10);
               if (!isNaN(pid) && pid > 0) {
+                console.log(`[FFMPEG_STOP] [t=${now}] [sessionId=${activeSession.sessionId}] Sending SIGTERM to active FFmpeg process PID ${pid}...`);
                 try { process.kill(pid, 'SIGTERM'); } catch (_) {}
               }
             }
           } catch (_) {}
         }
 
-        // 2. Immediately clean up HLS assets so players receive HTTP 404 and switch to OFFLINE state instead of looping stale segments
+        // Verify again before deleting HLS directories that no new publish came in during process kill
+        if (activeStreamClients.has(streamKey)) {
+          console.log(`[HLS_CLEANUP_SKIPPED] [t=${now}] New session connected during shutdown for key "${streamKey}". Preserving HLS directory.`);
+          return res.status(200).send('OK');
+        }
+
+        // 2. Transition to 'offline' in database
+        await db.updateStream(stream.id, { 
+          status: 'offline',
+          viewers: 0
+        });
+
+        // 3. Clean up HLS assets
         if (pendingCleanups.has(streamKey)) {
           clearTimeout(pendingCleanups.get(streamKey)!);
           pendingCleanups.delete(streamKey);
         }
-        console.log(`[RTMP Cleanup] Stream disconnected for key "${streamKey}". Cleaning up HLS directories immediately.`);
+        console.log(`[HLS_CLEANUP] [t=${now}] [sessionId=${activeSession.sessionId}] Stream disconnected for key "${streamKey}". Cleaning up HLS directories.`);
         const localStreamDir = path.resolve(`./data/hls/${streamKey}`);
         const vpsStreamDir = `/var/www/hls/${streamKey}`;
         if (fs.existsSync(localStreamDir)) { try { fs.rmSync(localStreamDir, { recursive: true, force: true }); } catch (e) {} }
@@ -3547,7 +3590,7 @@ async function startServer() {
         const updatedOffline = await db.getStreamByKey(streamKey);
         const augmentedOffline = updatedOffline ? await augmentStreamWithPlayback(updatedOffline, req) : null;
 
-        console.log(`[Stream Monitor] [State Transition] Stream "${stream.title}" (${streamKey}) -> OFFLINE via RTMP unpublish callback`);
+        console.log(`[STREAM_OFFLINE] [t=${now}] [sessionId=${activeSession.sessionId}] Stream "${stream.title}" (${streamKey}) -> OFFLINE via RTMP unpublish callback`);
         broadcastToDashboards({
           type: 'stream_status_change',
           streamId: stream.id,
@@ -4830,10 +4873,11 @@ async function startServer() {
 
           const isHlsFresh = lastMtime > 0 && (Date.now() - lastMtime) < 15000;
 
-          // Startup grace window: stream recently went live (<30s) or FFmpeg process is running
+          // Startup grace window: stream recently went live (<30s), FFmpeg process is running, or active RTMP session registered
           const startTimeMs = s.startTime ? new Date(s.startTime).getTime() : 0;
           const streamAgeMs = startTimeMs > 0 ? (Date.now() - startTimeMs) : Infinity;
-          const isInStartupGrace = (s.status === 'live') && (streamAgeMs < 30000 || isFfmpegRunning);
+          const hasActiveRtmpSession = activeStreamClients.has(s.streamKey);
+          const isInStartupGrace = (s.status === 'live') && (streamAgeMs < 30000 || isFfmpegRunning || hasActiveRtmpSession);
 
           // Stream is considered active if HLS playlist was updated within 15s OR it is in startup grace window
           const isCurrentlyActive = isHlsFresh || isInStartupGrace;

@@ -91,6 +91,40 @@
   ],
   "streams": [
     {
+      "id": "live_b716n131pipxgbbg",
+      "userId": 2,
+      "title": "Primary Production Stream",
+      "broadcaster": "StreamPulse",
+      "streamKey": "live_b716n131pipxgbbg",
+      "status": "offline",
+      "rtmpUrl": "rtmp://localhost/live",
+      "resolution": "1080p",
+      "bitrate": 6000,
+      "codec": "H.264",
+      "ingestIp": "127.0.0.1",
+      "startTime": "2026-08-09T16:20:54.688Z",
+      "viewers": 0,
+      "width": 1920,
+      "height": 1080,
+      "fps": 30,
+      "aspectRatio": "16:9",
+      "videoCodec": "H.264",
+      "audioCodec": "aac",
+      "preset": "veryfast",
+      "profile": "main",
+      "pixelFormat": "yuv420p",
+      "enabledProfiles": "1080p,720p,480p,360p",
+      "gopSize": 60,
+      "bufferSize": 9000,
+      "maxBitrate": 5000,
+      "scalingAlgorithm": "bicubic",
+      "audioEnabled": true,
+      "audioBitrate": "128k",
+      "audioSampleRate": 44100,
+      "audioChannels": "stereo",
+      "audioVolume": 100
+    },
+    {
       "userId": 2,
       "title": "media",
       "broadcaster": "namma ",
@@ -139,7 +173,7 @@
       "broadcaster": "dev_alex",
       "viewers": 0,
       "status": "offline",
-      "startTime": "2026-07-28T15:10:27.062Z",
+      "startTime": "2026-08-09T16:18:59.059Z",
       "rtmpUrl": "rtmp://localhost/live",
       "streamKey": "alex_secure_123",
       "resolution": "1080p",
@@ -223,8 +257,11 @@
   "playbackHistory": [],
   "deviceLogs": [],
   "deviceSchedules": [],
+  "auditLogs": [],
   "appSettings": {
-    "server_settings": "{\"deploymentMode\":\"auto\",\"customDomain\":\"\",\"manualIp\":\"\",\"setupCompleted\":true,\"ssl\":{\"installed\":false,\"status\":\"none\",\"expirationDate\":\"\",\"issuer\":\"\",\"httpsStatus\":\"disabled\"},\"streaming\":{\"rtmpPort\":1935,\"httpPort\":3000,\"httpsPort\":443,\"hlsSegmentDuration\":4,\"playlistLength\":5,\"recordingEnabled\":false,\"ffmpegProfiles\":{\"1080p\":true,\"720p\":true,\"480p\":true,\"360p\":true}},\"lastDetectedPublicIp\":\"34.34.244.77\",\"timezone\":\"Asia/Calcutta\"}",
-    "dashboard_preferences": "{\"activeTab\":\"dashboard\",\"manualIp\":\"\",\"customDomain\":\"\",\"creationIpMode\":\"auto\",\"deploymentMode\":\"auto\"}"
+    "server_settings": "{\"deploymentMode\":\"auto\",\"customDomain\":\"\",\"manualIp\":\"\",\"setupCompleted\":true,\"ssl\":{\"installed\":false,\"status\":\"none\",\"expirationDate\":\"\",\"issuer\":\"\",\"httpsStatus\":\"disabled\"},\"streaming\":{\"rtmpPort\":1935,\"httpPort\":3000,\"httpsPort\":443,\"hlsSegmentDuration\":4,\"playlistLength\":5,\"recordingEnabled\":false,\"ffmpegProfiles\":{\"1080p\":true,\"720p\":true,\"480p\":true,\"360p\":true}},\"lastDetectedPublicIp\":\"34.96.48.67\",\"timezone\":\"Asia/Calcutta\"}",
+    "dashboard_preferences": "{\"activeTab\":\"dashboard\",\"manualIp\":\"\",\"customDomain\":\"\",\"creationIpMode\":\"auto\",\"deploymentMode\":\"auto\"}",
+    "backup_last_run": "2026-08-09T07:17:02.887Z",
+    "backup_next_run": "2026-08-10T07:17:02.884Z"
   }
 }

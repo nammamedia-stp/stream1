@@ -265,8 +265,24 @@ async function startServer() {
         const stream = await db.getStreamByKey(streamKey);
         const hasActiveSession = activeStreamClients.has(streamKey);
 
-        // Allow HLS serving if stream is 'live' OR active RTMP publisher session is registered
-        if ((!stream || stream.status !== 'live') && !hasActiveSession) {
+        // Check if FFmpeg process or HLS files exist on disk
+        const localMasterPath = path.join(hlsPath, `${streamKey}/master.m3u8`);
+        const vpsMasterPath = path.join(vpsHlsPath, `${streamKey}/master.m3u8`);
+        const hasHlsMaster = fs.existsSync(localMasterPath) || fs.existsSync(vpsMasterPath);
+
+        let isFfmpegRunning = false;
+        const pidFile = `/tmp/ffmpeg_${streamKey}.pid`;
+        if (fs.existsSync(pidFile)) {
+          try {
+            const pid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim(), 10);
+            if (!isNaN(pid) && pid > 0) {
+              try { process.kill(pid, 0); isFfmpegRunning = true; } catch (_) {}
+            }
+          } catch (_) {}
+        }
+
+        // Allow HLS serving if stream is 'live', active RTMP session is registered, FFmpeg is running, or HLS master exists on disk
+        if ((!stream || stream.status !== 'live') && !hasActiveSession && !isFfmpegRunning && !hasHlsMaster) {
           return res.status(404).send('Stream Offline');
         }
 
@@ -283,8 +299,8 @@ async function startServer() {
 
           const stats = fs.statSync(targetPath);
           const ageMs = Date.now() - stats.mtimeMs;
-          if (ageMs > 30000 && !hasActiveSession) {
-            console.log(`[HLS Middleware] Rejecting stale variant playlist for key "${streamKey}" (age: ${(ageMs / 1000).toFixed(1)}s > 30s)`);
+          if (ageMs > 45000 && !hasActiveSession && !isFfmpegRunning) {
+            console.log(`[HLS Middleware] Rejecting stale variant playlist for key "${streamKey}" (age: ${(ageMs / 1000).toFixed(1)}s > 45s)`);
             return res.status(404).send('HLS Playlist Stale');
           }
         }
@@ -3553,8 +3569,8 @@ async function startServer() {
       return res.status(200).send('OK');
     }
 
-    if (clientId && activeSession.clientId !== strClientId) {
-      console.log(`[STALE_UNPUBLISH_IGNORED] [t=${now}] Key "${streamKey}" (disconnect client ${strClientId} != active client ${activeSession.clientId}, active session ${activeSession.sessionId}). Ignoring stale publish_done.`);
+    if (activeSession.clientId !== 'unknown' && strClientId !== activeSession.clientId) {
+      console.log(`[STALE_UNPUBLISH_IGNORED] [t=${now}] Key "${streamKey}" (disconnect client "${strClientId}" != active client "${activeSession.clientId}", active session ${activeSession.sessionId}). Ignoring stale publish_done.`);
       return res.status(200).send('OK');
     }
 
@@ -3634,6 +3650,116 @@ async function startServer() {
     } catch (err) {
       console.error(`[RTMP Publish Done Callback] Error:`, err);
       return res.status(500).send('Internal Server Error');
+    }
+  });
+
+  // ----------------------------------------------------
+  // LIGHTWEIGHT STREAM PIPELINE DIAGNOSTICS ENDPOINT
+  // ----------------------------------------------------
+  app.get(['/api/stream/health', '/api/stream/health/:streamKey', '/api/stream/status', '/api/stream/status/:streamKey'], async (req: any, res: any) => {
+    const streamKey = req.params.streamKey || req.query.streamKey || req.query.key;
+    if (!streamKey || typeof streamKey !== 'string') {
+      return res.status(400).json({ error: 'streamKey parameter is required' });
+    }
+
+    try {
+      const stream = await db.getStreamByKey(streamKey);
+      const activeSession = activeStreamClients.get(streamKey);
+
+      const rtmpState = activeSession ? 'UP' : 'DOWN';
+
+      // Check FFmpeg PID
+      let ffmpegState = 'DOWN';
+      let ffmpegPid: number | null = null;
+      const pidFile = `/tmp/ffmpeg_${streamKey}.pid`;
+      if (fs.existsSync(pidFile)) {
+        try {
+          const pid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim(), 10);
+          if (!isNaN(pid) && pid > 0) {
+            try {
+              process.kill(pid, 0);
+              ffmpegState = 'UP';
+              ffmpegPid = pid;
+            } catch (_) {}
+          }
+        } catch (_) {}
+      }
+
+      // Check HLS Master Manifest
+      const localMaster = path.resolve(`./data/hls/${streamKey}/master.m3u8`);
+      const vpsMaster = `/var/www/hls/${streamKey}/master.m3u8`;
+      const masterPath = fs.existsSync(vpsMaster) ? vpsMaster : (fs.existsSync(localMaster) ? localMaster : null);
+      const hlsState = (masterPath && fs.statSync(masterPath).size > 0) ? 'UP' : 'DOWN';
+
+      // Check Variant Playlist Advancing status
+      let playlistState = 'MISSING';
+      let playlistAgeSeconds = null;
+      let mediaSequence = null;
+      let tsCount = 0;
+
+      const vpsDir = `/var/www/hls/${streamKey}`;
+      const localDir = path.resolve(`./data/hls/${streamKey}`);
+      const hlsDir = fs.existsSync(vpsDir) ? vpsDir : (fs.existsSync(localDir) ? localDir : null);
+
+      if (hlsDir) {
+        // Find variant index.m3u8
+        const variantCandidates = ['Original/index.m3u8', '1080p/index.m3u8', '720p/index.m3u8', '480p/index.m3u8', '360p/index.m3u8', 'index.m3u8'];
+        let variantPath: string | null = null;
+        for (const cand of variantCandidates) {
+          const fullPath = path.join(hlsDir, cand);
+          if (fs.existsSync(fullPath)) {
+            variantPath = fullPath;
+            break;
+          }
+        }
+
+        if (variantPath) {
+          const stat = fs.statSync(variantPath);
+          const ageMs = Date.now() - stat.mtimeMs;
+          playlistAgeSeconds = Number((ageMs / 1000).toFixed(1));
+
+          try {
+            const content = fs.readFileSync(variantPath, 'utf-8');
+            const seqMatch = content.match(/#EXT-X-MEDIA-SEQUENCE:(\d+)/);
+            if (seqMatch) {
+              mediaSequence = parseInt(seqMatch[1], 10);
+            }
+            const tsMatches = content.match(/\.ts$/gm);
+            tsCount = tsMatches ? tsMatches.length : 0;
+          } catch (_) {}
+
+          playlistState = (ageMs <= 20000) ? 'ADVANCING' : 'STALE';
+        }
+      }
+
+      const streamState = stream?.status === 'live' ? 'LIVE' : 'OFFLINE';
+
+      const summaryStr = `RTMP=${rtmpState} FFMPEG=${ffmpegState} HLS=${hlsState} PLAYLIST=${playlistState} STREAM_STATE=${streamState}`;
+
+      if (req.query.format === 'text' || req.query.summary === 'true') {
+        return res.setHeader('Content-Type', 'text/plain').send(summaryStr);
+      }
+
+      return res.json({
+        streamKey,
+        summary: summaryStr,
+        RTMP: rtmpState,
+        FFMPEG: ffmpegState,
+        HLS: hlsState,
+        PLAYLIST: playlistState,
+        STREAM_STATE: streamState,
+        details: {
+          sessionId: activeSession?.sessionId || null,
+          clientId: activeSession?.clientId || null,
+          ffmpegPid,
+          playlistAgeSeconds,
+          mediaSequence,
+          tsCount,
+          dbStatus: stream?.status || 'not_found'
+        }
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Health check failed' });
     }
   });
 

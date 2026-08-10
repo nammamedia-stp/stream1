@@ -296,7 +296,7 @@ export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams
   const serverOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
   const activeStream = streams.find(s => s.streamKey === selectedStreamKey) || streams[0];
   const activeKey = selectedStreamKey || activeStream?.streamKey || 'live_stream';
-  const curlCommand = `curl -sSL ${serverOrigin}/api/rpi-player/script/setup?streamKey=${activeKey} | bash`;
+  const curlCommand = `curl -sSL "${serverOrigin}/api/rpi-player/script/setup?streamKey=${activeKey}" | sudo bash`;
 
   const totalDevices = devices.length;
   const playingDevices = devices.filter(d => d.online_status === 'playing' || d.online_status === 'online').length;
@@ -775,7 +775,7 @@ export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams
 
             <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 flex items-center justify-between gap-4 font-mono text-xs text-emerald-400 overflow-x-auto">
               <code className="select-all">{curlCommand}</code>
-              <CopyButton textToCopy={curlCommand} label="Copy Command" />
+              <CopyButton text={curlCommand} label="Copy Command" />
             </div>
           </div>
 
@@ -826,7 +826,7 @@ export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams
               </div>
 
               <div className="flex items-center gap-2 py-2">
-                <CopyButton textToCopy={scriptContents[scriptTab] || ''} label="Copy Code" />
+                <CopyButton text={scriptContents[scriptTab] || ''} label="Copy Code" />
               </div>
             </div>
 

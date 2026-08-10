@@ -153,9 +153,9 @@ fi
 
 # Detect Desktop vs Lite
 IS_DESKTOP=0
-if command -v Xorg >/dev/null 2>&1 || [ -d /usr/share/wayland-sessions ]; then
+if command -v Xorg >/dev/null 2>&1 || [ -d /usr/share/wayland-sessions ] || [ -n "\${WAYLAND_DISPLAY}" ]; then
   IS_DESKTOP=1
-  echo "OS Environment: Raspberry Pi OS Desktop (GUI Mode)"
+  echo "OS Environment: Raspberry Pi OS Desktop (GUI / Wayland / X11 Mode)"
 else
   echo "OS Environment: Raspberry Pi OS Lite (Headless Mode)"
 fi
@@ -209,12 +209,15 @@ cat << 'EOF_LAUNCHER' > /opt/streampulse/kiosk.sh
 # StreamPulse Kiosk Launcher Script
 export DISPLAY=\${DISPLAY:-:0}
 export WAYLAND_DISPLAY=\${WAYLAND_DISPLAY:-wayland-0}
+export XDG_RUNTIME_DIR=\${XDG_RUNTIME_DIR:-/run/user/1000}
 
-# Hide mouse cursor on inactivity
-unclutter -idle 2 -root &
+# Hide mouse cursor on inactivity if unclutter is present
+if command -v unclutter >/dev/null 2>&1; then
+  unclutter -idle 2 -root &
+fi
 
-SERVER_URL="${serverUrl}"
-STREAM_KEY="${streamKey}"
+SERVER_URL="__SERVER_URL__"
+STREAM_KEY="__STREAM_KEY__"
 TARGET_URL="\${SERVER_URL}/rpi-kiosk?streamKey=\${STREAM_KEY}"
 
 # Disable power saving screen blanking
@@ -224,17 +227,23 @@ xset s noblank 2>/dev/null || true
 
 CHROMIUM_FLAGS=(
   --kiosk
+  --fullscreen
   --noerrdialogs
   --disable-infobars
   --autoplay-policy=no-user-gesture-required
   --check-for-update-interval=31536000
   --disable-component-update
+  --no-first-run
+  --disable-features=TranslateUI
+  --disable-save-password-bubble
+  --disable-restore-session-state
   --enable-accelerated-video-decode
   --enable-gpu-rasterization
   --enable-zero-copy
   --ignore-gpu-blocklist
   --use-gl=egl
   --window-position=0,0
+  --window-size=1920,1080
 )
 
 echo "[StreamPulse Player] Booting StreamPulse Kiosk..."
@@ -257,13 +266,15 @@ while true; do
 done
 EOF_LAUNCHER
 
+sed -i "s|__SERVER_URL__|\${SERVER_URL}|g" /opt/streampulse/kiosk.sh
+sed -i "s|__STREAM_KEY__|\${STREAM_KEY}|g" /opt/streampulse/kiosk.sh
 chmod +x /opt/streampulse/kiosk.sh
 
 echo "[5/6] Creating Systemd Service for Auto Boot on Startup..."
 cat << 'EOF_SERVICE' > /etc/systemd/system/streampulse-rpi-player.service
 [Unit]
 Description=StreamPulse Raspberry Pi Kiosk Streaming Player
-After=network-online.target sound.target graphical.target
+After=network-online.target sound.target graphical-session.target graphical.target
 Wants=network-online.target
 
 [Service]
@@ -271,6 +282,7 @@ Type=simple
 User=pi
 Environment=DISPLAY=:0
 Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=/run/user/1000
 ExecStart=/opt/streampulse/kiosk.sh
 Restart=always
 RestartSec=3
@@ -280,11 +292,10 @@ KillMode=process
 WantedBy=graphical.target
 EOF_SERVICE
 
-# If user 'pi' doesn't exist, replace User with active user or root
-if ! id -u pi >/dev/null 2>&1; {
-  CURRENT_USER=$(logname 2>/dev/null || echo "root")
+if ! id -u pi >/dev/null 2>&1; then
+  CURRENT_USER=$(logname 2>/dev/null || id -un 1000 2>/dev/null || echo "root")
   sed -i "s/User=pi/User=\${CURRENT_USER}/g" /etc/systemd/system/streampulse-rpi-player.service
-}
+fi
 
 systemctl daemon-reload
 systemctl enable streampulse-rpi-player.service
@@ -293,11 +304,14 @@ echo "[6/6] Configuring Auto-Update Cron Script..."
 cat << 'EOF_UPDATE' > /opt/streampulse/update.sh
 #!/usr/bin/env bash
 echo "[StreamPulse RPi Auto-Update] Syncing player configuration..."
-SERVER_URL="${serverUrl}"
-curl -sSL "\${SERVER_URL}/api/rpi-player/script/setup?streamKey=${streamKey}" | bash -s -- --update || true
+SERVER_URL="__SERVER_URL__"
+STREAM_KEY="__STREAM_KEY__"
+curl -sSL "\${SERVER_URL}/api/rpi-player/script/setup?streamKey=\${STREAM_KEY}" | sudo bash -s -- --update || true
 systemctl restart streampulse-rpi-player.service || true
 EOF_UPDATE
 
+sed -i "s|__SERVER_URL__|\${SERVER_URL}|g" /opt/streampulse/update.sh
+sed -i "s|__STREAM_KEY__|\${STREAM_KEY}|g" /opt/streampulse/update.sh
 chmod +x /opt/streampulse/update.sh
 
 echo "========================================================================"
@@ -313,7 +327,7 @@ echo "========================================================================"
   public generateSystemdService(): string {
     return `[Unit]
 Description=StreamPulse Raspberry Pi Kiosk Streaming Player
-After=network-online.target sound.target graphical.target
+After=network-online.target sound.target graphical-session.target graphical.target
 Wants=network-online.target
 
 [Service]
@@ -321,6 +335,7 @@ Type=simple
 User=pi
 Environment=DISPLAY=:0
 Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=/run/user/1000
 ExecStart=/opt/streampulse/kiosk.sh
 Restart=always
 RestartSec=3
@@ -340,6 +355,7 @@ WantedBy=graphical.target`;
 
 export DISPLAY=\${DISPLAY:-:0}
 export WAYLAND_DISPLAY=\${WAYLAND_DISPLAY:-wayland-0}
+export XDG_RUNTIME_DIR=\${XDG_RUNTIME_DIR:-/run/user/1000}
 
 # Disable screen blanking
 xset s off 2>/dev/null || true
@@ -347,18 +363,28 @@ xset -dpms 2>/dev/null || true
 xset s noblank 2>/dev/null || true
 
 # Hide cursor after 2s inactivity
-unclutter -idle 2 -root &
+if command -v unclutter >/dev/null 2>&1; then
+  unclutter -idle 2 -root &
+fi
 
 TARGET_URL="${serverUrl}/rpi-kiosk?streamKey=${streamKey}"
 
 exec chromium-browser \\
   --kiosk \\
+  --fullscreen \\
   --noerrdialogs \\
   --disable-infobars \\
   --autoplay-policy=no-user-gesture-required \\
+  --check-for-update-interval=31536000 \\
+  --disable-component-update \\
+  --no-first-run \\
+  --disable-features=TranslateUI \\
+  --disable-save-password-bubble \\
+  --disable-restore-session-state \\
   --enable-accelerated-video-decode \\
   --enable-gpu-rasterization \\
   --enable-zero-copy \\
+  --ignore-gpu-blocklist \\
   --use-gl=egl \\
   "\${TARGET_URL}"`;
   }
@@ -370,7 +396,7 @@ exec chromium-browser \\
 set -e
 echo "[StreamPulse RPi Player] Checking for server configuration updates..."
 SERVER_URL="${serverUrl}"
-curl -sSL "\${SERVER_URL}/api/rpi-player/script/setup" | bash -s -- --update
+curl -sSL "\${SERVER_URL}/api/rpi-player/script/setup" | sudo bash -s -- --update
 systemctl restart streampulse-rpi-player.service
 echo "[StreamPulse RPi Player] Player updated successfully!"`;
   }

@@ -4588,7 +4588,8 @@ async function startServer() {
     const host = (req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000').toString();
     const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.protocol === 'https' || req.secure;
     const protoHost = `${isHttps ? 'https' : 'http'}://${host}`;
-    const key = (req.query.streamKey || rpiPlayerSystem.getConfig().defaultStreamKey || 'live_stream').toString();
+    const keyRaw = (req.query.streamKey || rpiPlayerSystem.getConfig().defaultStreamKey || 'live_stream').toString();
+    const key = keyRaw.replace(/[^a-zA-Z0-9_-]/g, '') || 'live_stream';
     const script = rpiPlayerSystem.generateSetupScript(protoHost, key);
     res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
     res.setHeader('Content-Disposition', 'inline; filename="setup-rpi-player.sh"');
@@ -4606,7 +4607,8 @@ async function startServer() {
     const host = (req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000').toString();
     const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.protocol === 'https' || req.secure;
     const protoHost = `${isHttps ? 'https' : 'http'}://${host}`;
-    const key = (req.query.streamKey || rpiPlayerSystem.getConfig().defaultStreamKey || 'live_stream').toString();
+    const keyRaw = (req.query.streamKey || rpiPlayerSystem.getConfig().defaultStreamKey || 'live_stream').toString();
+    const key = keyRaw.replace(/[^a-zA-Z0-9_-]/g, '') || 'live_stream';
     const script = rpiPlayerSystem.generateAutoStartScript(protoHost, key);
     res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
     res.setHeader('Content-Disposition', 'inline; filename="streampulse-kiosk.sh"');

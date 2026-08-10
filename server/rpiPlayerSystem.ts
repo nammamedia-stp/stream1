@@ -644,6 +644,25 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
         }).catch(() => {});
       }
 
+      function safePlay() {
+        videoEl.muted = true;
+        videoEl.playsInline = true;
+        videoEl.autoplay = true;
+        return videoEl.play().then(() => {
+          isPlaying = true;
+          updateStatus('live', 'Live • ' + (videoEl.videoHeight || 1080) + 'p', fps + ' FPS');
+        }).catch((err) => {
+          console.warn('[RPi Player] Playback attempt rejected:', err);
+          videoEl.muted = true;
+          return videoEl.play().then(() => {
+            isPlaying = true;
+            updateStatus('live', 'Live (Muted)', fps + ' FPS');
+          }).catch((e) => {
+            console.error('[RPi Player] Muted playback retry rejected:', e);
+          });
+        });
+      }
+
       function initHlsJs() {
         if (!window.Hls || !Hls.isSupported()) {
           console.warn('[RPi Player] HLS.js not supported. Falling back to Video.js...');
@@ -652,7 +671,8 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
         }
 
         if (hlsInstance) {
-          hlsInstance.destroy();
+          try { hlsInstance.destroy(); } catch (e) {}
+          hlsInstance = null;
         }
 
         currentEngine = 'HLS.js (GPU Hardware Accelerated)';
@@ -670,22 +690,12 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
 
         hlsInstance.on(Hls.Events.MANIFEST_PARSED, function() {
           console.log('[RPi Player] Manifest parsed successfully. Starting video playback.');
-          videoEl.play().then(() => {
-            isPlaying = true;
-            videoEl.muted = false; // Unmute if browser permits
-            updateStatus('live', 'Live • ' + (videoEl.videoHeight || 1080) + 'p', fps + ' FPS');
-          }).catch(() => {
-            // If browser autoplay blocks audio, play muted and retry
-            videoEl.muted = true;
-            videoEl.play();
-            isPlaying = true;
-            updateStatus('live', 'Live (Muted)', fps + ' FPS');
-          });
+          safePlay();
         });
 
         hlsInstance.on(Hls.Events.ERROR, function(event, data) {
           if (data.fatal) {
-            console.warn('[HLS_RECOVERY] detected fatal error:', data.type);
+            console.warn('[HLS_RECOVERY] detected fatal error:', data.type, data.details);
             isPlaying = false;
             updateStatus('reconnecting', 'Stream Offline • Reconnecting...', '');
             
@@ -698,6 +708,7 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
                 console.warn('[HLS_RECOVERY] detected fatal media error, attempting recoverMediaError');
                 try {
                   hlsInstance.recoverMediaError();
+                  safePlay();
                 } catch (e) {
                   pollAndReconnect();
                 }
@@ -714,15 +725,12 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
         console.log('[RPi Player] Initializing Video.js fallback engine...');
         currentEngine = 'Video.js Fallback';
         if (hlsInstance) {
-          hlsInstance.destroy();
+          try { hlsInstance.destroy(); } catch (e) {}
           hlsInstance = null;
         }
 
         videoEl.src = HLS_URL + '?_t=' + Date.now();
-        videoEl.play().then(() => {
-          isPlaying = true;
-          updateStatus('live', 'Live (Video.js)', fps + ' FPS');
-        }).catch((err) => {
+        safePlay().catch(() => {
           isPlaying = false;
           updateStatus('reconnecting', 'Stream Offline • Reconnecting...', '');
           setTimeout(pollAndReconnect, 2000);
@@ -766,11 +774,35 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
         updateStatus('reconnecting', 'Buffering...', '');
       });
 
+      videoEl.addEventListener('pause', () => {
+        if (isPlaying) {
+          console.warn('[RPi Player] Video paused unexpectedly. Attempting automatic resume...');
+          safePlay();
+        }
+      });
+
       videoEl.addEventListener('ended', () => {
         isPlaying = false;
         updateStatus('reconnecting', 'Stream ended. Waiting for live feed...', '');
         setTimeout(pollAndReconnect, RECONNECT_INTERVAL);
       });
+
+      // User interaction listener to allow optional unmuting without pausing playback
+      function tryUnmute() {
+        if (videoEl.muted) {
+          videoEl.muted = false;
+          setTimeout(() => {
+            if (videoEl.paused) {
+              console.warn('[RPi Player] Unmute caused pause. Re-muting and resuming playback...');
+              videoEl.muted = true;
+              safePlay();
+            }
+          }, 100);
+        }
+      }
+      window.addEventListener('click', tryUnmute);
+      window.addEventListener('touchstart', tryUnmute);
+      window.addEventListener('keydown', tryUnmute);
 
       // Start initial playback
       initHlsJs();
@@ -780,8 +812,8 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
       
       // Periodic health checker
       checkPollTimer = setInterval(() => {
-        if (videoEl.paused && isPlaying) {
-          videoEl.play().catch(() => {});
+        if (videoEl.paused) {
+          safePlay();
         }
       }, 3000);
 

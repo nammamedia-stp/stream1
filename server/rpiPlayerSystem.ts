@@ -151,6 +151,14 @@ else
   echo "Detected Raspberry Pi 4 - Hardware Video Acceleration (H.264 V4L2M2M / MMAL) active."
 fi
 
+# Detect active graphical/non-root user for systemd service
+LOGGED_USER="\${SUDO_USER:-$(logname 2>/dev/null || id -un 1000 2>/dev/null || echo "pi")}"
+if [ "\${LOGGED_USER}" = "root" ]; then
+  LOGGED_USER=$(id -un 1000 2>/dev/null || echo "pi")
+fi
+LOGGED_UID=$(id -u "\${LOGGED_USER}" 2>/dev/null || echo "1000")
+echo "Target Graphical User: \${LOGGED_USER} (UID: \${LOGGED_UID})"
+
 # Detect Desktop vs Lite
 IS_DESKTOP=0
 if command -v Xorg >/dev/null 2>&1 || [ -d /usr/share/wayland-sessions ] || [ -n "\${WAYLAND_DISPLAY}" ]; then
@@ -204,20 +212,20 @@ mkdir -p /opt/streampulse
 chmod 755 /opt/streampulse
 
 # Create Kiosk Launcher Script
-cat << 'EOF_LAUNCHER' > /opt/streampulse/kiosk.sh
+cat << EOF_LAUNCHER > /opt/streampulse/kiosk.sh
 #!/usr/bin/env bash
 # StreamPulse Kiosk Launcher Script
 export DISPLAY=\${DISPLAY:-:0}
 export WAYLAND_DISPLAY=\${WAYLAND_DISPLAY:-wayland-0}
-export XDG_RUNTIME_DIR=\${XDG_RUNTIME_DIR:-/run/user/1000}
+export XDG_RUNTIME_DIR=\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}
 
 # Hide mouse cursor on inactivity if unclutter is present
 if command -v unclutter >/dev/null 2>&1; then
   unclutter -idle 2 -root &
 fi
 
-SERVER_URL="__SERVER_URL__"
-STREAM_KEY="__STREAM_KEY__"
+SERVER_URL="${serverUrl}"
+STREAM_KEY="${streamKey}"
 TARGET_URL="\${SERVER_URL}/rpi-kiosk?streamKey=\${STREAM_KEY}"
 
 # Disable power saving screen blanking
@@ -227,6 +235,7 @@ xset s noblank 2>/dev/null || true
 
 CHROMIUM_FLAGS=(
   --kiosk
+  --start-fullscreen
   --fullscreen
   --noerrdialogs
   --disable-infobars
@@ -237,6 +246,7 @@ CHROMIUM_FLAGS=(
   --disable-features=TranslateUI
   --disable-save-password-bubble
   --disable-restore-session-state
+  --disable-session-crashed-bubble
   --enable-accelerated-video-decode
   --enable-gpu-rasterization
   --enable-zero-copy
@@ -266,12 +276,10 @@ while true; do
 done
 EOF_LAUNCHER
 
-sed -i "s|__SERVER_URL__|\${SERVER_URL}|g" /opt/streampulse/kiosk.sh
-sed -i "s|__STREAM_KEY__|\${STREAM_KEY}|g" /opt/streampulse/kiosk.sh
 chmod +x /opt/streampulse/kiosk.sh
 
 echo "[5/6] Creating Systemd Service for Auto Boot on Startup..."
-cat << 'EOF_SERVICE' > /etc/systemd/system/streampulse-rpi-player.service
+cat << EOF_SERVICE > /etc/systemd/system/streampulse-rpi-player.service
 [Unit]
 Description=StreamPulse Raspberry Pi Kiosk Streaming Player
 After=network-online.target sound.target graphical-session.target graphical.target
@@ -279,10 +287,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
+User=\${LOGGED_USER}
 Environment=DISPLAY=:0
 Environment=WAYLAND_DISPLAY=wayland-0
-Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=XDG_RUNTIME_DIR=/run/user/\${LOGGED_UID}
 ExecStart=/opt/streampulse/kiosk.sh
 Restart=always
 RestartSec=3
@@ -292,32 +300,26 @@ KillMode=process
 WantedBy=graphical.target
 EOF_SERVICE
 
-if ! id -u pi >/dev/null 2>&1; then
-  CURRENT_USER=$(logname 2>/dev/null || id -un 1000 2>/dev/null || echo "root")
-  sed -i "s/User=pi/User=\${CURRENT_USER}/g" /etc/systemd/system/streampulse-rpi-player.service
-fi
-
 systemctl daemon-reload
 systemctl enable streampulse-rpi-player.service
 
 echo "[6/6] Configuring Auto-Update Cron Script..."
-cat << 'EOF_UPDATE' > /opt/streampulse/update.sh
+cat << EOF_UPDATE > /opt/streampulse/update.sh
 #!/usr/bin/env bash
 echo "[StreamPulse RPi Auto-Update] Syncing player configuration..."
-SERVER_URL="__SERVER_URL__"
-STREAM_KEY="__STREAM_KEY__"
+SERVER_URL="${serverUrl}"
+STREAM_KEY="${streamKey}"
 curl -sSL "\${SERVER_URL}/api/rpi-player/script/setup?streamKey=\${STREAM_KEY}" | sudo bash -s -- --update || true
 systemctl restart streampulse-rpi-player.service || true
 EOF_UPDATE
 
-sed -i "s|__SERVER_URL__|\${SERVER_URL}|g" /opt/streampulse/update.sh
-sed -i "s|__STREAM_KEY__|\${STREAM_KEY}|g" /opt/streampulse/update.sh
 chmod +x /opt/streampulse/update.sh
 
 echo "========================================================================"
 echo " StreamPulse Raspberry Pi Streaming Player Installation Complete! "
 echo " Systemd Service: streampulse-rpi-player.service (Enabled)"
 echo " Auto Boot Mode: Fullscreen Kiosk Enabled"
+echo " Target User: \${LOGGED_USER}"
 echo " You can manually start the player now with:"
 echo "   sudo systemctl start streampulse-rpi-player"
 echo "========================================================================"

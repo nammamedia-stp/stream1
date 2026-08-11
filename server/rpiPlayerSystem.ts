@@ -235,18 +235,31 @@ chown -R "\${LOGGED_USER}:\${LOGGED_USER}" /opt/streampulse || true
 chmod 644 "\${LOCAL_MOTION_FILE}" 2>/dev/null || true
 
 # Create Kiosk Launcher Script
-cat << EOF_LAUNCHER > /opt/streampulse/kiosk.sh
+cat << 'EOF_LAUNCHER' > /opt/streampulse/kiosk.sh
 #!/usr/bin/env bash
 # StreamPulse Kiosk Launcher Script
-export DISPLAY=\${DISPLAY:-:0}
-export WAYLAND_DISPLAY=\${WAYLAND_DISPLAY:-wayland-0}
-export XDG_RUNTIME_DIR=\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}
+LOGGED_USER="$(id -un)"
+if [ "\${LOGGED_USER}" = "root" ]; then
+  LOGGED_USER="\${SUDO_USER:-$(logname 2>/dev/null || id -un 1000 2>/dev/null || echo "pi")}"
+  if [ "\${LOGGED_USER}" = "root" ]; then
+    LOGGED_USER=$(id -un 1000 2>/dev/null || echo "pi")
+  fi
+fi
+LOGGED_UID=$(id -u "\${LOGGED_USER}" 2>/dev/null || echo "1000")
+LOGGED_HOME=$(getent passwd "\${LOGGED_USER}" | cut -d: -f6 || echo "/home/\${LOGGED_USER}")
+if [ -z "\${LOGGED_HOME}" ] || [ ! -d "\${LOGGED_HOME}" ]; then
+  LOGGED_HOME="/home/\${LOGGED_USER}"
+fi
+
+export DISPLAY="\${DISPLAY:-:0}"
+export WAYLAND_DISPLAY="\${WAYLAND_DISPLAY:-wayland-0}"
+export XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-/run/user/\${LOGGED_UID}}"
 
 # Dedicated StreamPulse Chromium profile directory to isolate from normal user profile
 CHROMIUM_PROFILE_DIR="/opt/streampulse/chromium-profile"
 mkdir -p "\${CHROMIUM_PROFILE_DIR}" 2>/dev/null || true
 
-# Prevent spawning duplicate Chromium kiosk windows if already running
+# Prevent spawning duplicate Chromium kiosk windows if already running with dedicated profile
 if pgrep -f "chromium.*--user-data-dir=/opt/streampulse/chromium-profile" >/dev/null 2>&1; then
   echo "[StreamPulse Player] StreamPulse Chromium kiosk is already running with dedicated profile. Exiting."
   exit 0
@@ -262,11 +275,6 @@ if command -v unclutter >/dev/null 2>&1; then
 fi
 
 # Sync user Motion Logo from Downloads if present
-LOGGED_HOME=$(getent passwd "\${LOGGED_USER}" | cut -d: -f6 || echo "/home/\${LOGGED_USER}")
-if [ -z "\${LOGGED_HOME}" ] || [ ! -d "\${LOGGED_HOME}" ]; then
-  LOGGED_HOME=$(getent passwd "\$(id -un)" | cut -d: -f6 || echo "\${HOME}")
-fi
-
 mkdir -p /opt/streampulse/media
 USER_DOWNLOAD_LOGO="\${LOGGED_HOME}/Downloads/Motion Logo.mp4"
 USER_DOWNLOAD_LOGO_ALT="\${LOGGED_HOME}/Downloads/motion_logo.mp4"
@@ -308,20 +316,20 @@ CHROMIUM_FLAGS=(
   --noerrdialogs
   --disable-infobars
   --autoplay-policy=no-user-gesture-required
-  --check-for-update-interval=31536000
-  --disable-component-update
   --no-first-run
-  --disable-features=TranslateUI
-  --disable-save-password-bubble
   --disable-restore-session-state
   --disable-session-crashed-bubble
-  --allow-file-access-from-files
-  --disable-web-security
   --enable-accelerated-video-decode
   --enable-gpu-rasterization
   --enable-zero-copy
   --ignore-gpu-blocklist
   --use-gl=egl
+  --check-for-update-interval=31536000
+  --disable-component-update
+  --disable-features=TranslateUI
+  --disable-save-password-bubble
+  --allow-file-access-from-files
+  --disable-web-security
   --window-position=0,0
   --window-size=1920,1080
 )
@@ -329,10 +337,19 @@ CHROMIUM_FLAGS=(
 echo "[StreamPulse Player] Booting StreamPulse Kiosk..."
 echo "Target Stream URL: \${TARGET_URL}"
 
+CHROMIUM_BIN=""
 if command -v chromium-browser >/dev/null 2>&1; then
-  exec chromium-browser "\${CHROMIUM_FLAGS[@]}" "\${TARGET_URL}"
+  CHROMIUM_BIN="chromium-browser"
 elif command -v chromium >/dev/null 2>&1; then
-  exec chromium "\${CHROMIUM_FLAGS[@]}" "\${TARGET_URL}"
+  CHROMIUM_BIN="chromium"
+elif [ -x /usr/bin/chromium-browser ]; then
+  CHROMIUM_BIN="/usr/bin/chromium-browser"
+elif [ -x /usr/bin/chromium ]; then
+  CHROMIUM_BIN="/usr/bin/chromium"
+fi
+
+if [ -n "\${CHROMIUM_BIN}" ]; then
+  exec "\${CHROMIUM_BIN}" "\${CHROMIUM_FLAGS[@]}" "\${TARGET_URL}"
 elif command -v mpv >/dev/null 2>&1; then
   exec mpv --hwdec=auto --fullscreen --loop-playlist=inf "\${SERVER_URL}/hls/\${STREAM_KEY}/master.m3u8"
 elif command -v cvlc >/dev/null 2>&1; then
@@ -419,15 +436,28 @@ WantedBy=graphical.target`;
 
     return `#!/usr/bin/env bash
 # StreamPulse Kiosk Autostart Script
-export DISPLAY=\${DISPLAY:-:0}
-export WAYLAND_DISPLAY=\${WAYLAND_DISPLAY:-wayland-0}
-export XDG_RUNTIME_DIR=\${XDG_RUNTIME_DIR:-/run/user/1000}
+LOGGED_USER="$(id -un)"
+if [ "\${LOGGED_USER}" = "root" ]; then
+  LOGGED_USER="\${SUDO_USER:-$(logname 2>/dev/null || id -un 1000 2>/dev/null || echo "pi")}"
+  if [ "\${LOGGED_USER}" = "root" ]; then
+    LOGGED_USER=$(id -un 1000 2>/dev/null || echo "pi")
+  fi
+fi
+LOGGED_UID=$(id -u "\${LOGGED_USER}" 2>/dev/null || echo "1000")
+LOGGED_HOME=$(getent passwd "\${LOGGED_USER}" | cut -d: -f6 || echo "/home/\${LOGGED_USER}")
+if [ -z "\${LOGGED_HOME}" ] || [ ! -d "\${LOGGED_HOME}" ]; then
+  LOGGED_HOME="/home/\${LOGGED_USER}"
+fi
+
+export DISPLAY="\${DISPLAY:-:0}"
+export WAYLAND_DISPLAY="\${WAYLAND_DISPLAY:-wayland-0}"
+export XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-/run/user/\${LOGGED_UID}}"
 
 # Dedicated StreamPulse Chromium profile directory to isolate from normal user profile
 CHROMIUM_PROFILE_DIR="/opt/streampulse/chromium-profile"
 mkdir -p "\${CHROMIUM_PROFILE_DIR}" 2>/dev/null || true
 
-# Prevent spawning duplicate Chromium kiosk windows if already running
+# Prevent spawning duplicate Chromium kiosk windows if already running with dedicated profile
 if pgrep -f "chromium.*--user-data-dir=/opt/streampulse/chromium-profile" >/dev/null 2>&1; then
   echo "[StreamPulse Player] StreamPulse Chromium kiosk is already running with dedicated profile. Exiting."
   exit 0
@@ -448,12 +478,6 @@ if command -v unclutter >/dev/null 2>&1; then
 fi
 
 # Sync user Motion Logo from Downloads if present
-LOGGED_USER="\${SUDO_USER:-$(logname 2>/dev/null || id -un 1000 2>/dev/null || echo "pi")}"
-if [ "\${LOGGED_USER}" = "root" ]; then
-  LOGGED_USER=$(id -un 1000 2>/dev/null || echo "pi")
-fi
-LOGGED_HOME=$(getent passwd "\${LOGGED_USER}" | cut -d: -f6 || echo "/home/\${LOGGED_USER}")
-
 mkdir -p /opt/streampulse/media
 USER_DOWNLOAD_LOGO="\${LOGGED_HOME}/Downloads/Motion Logo.mp4"
 USER_DOWNLOAD_LOGO_ALT="\${LOGGED_HOME}/Downloads/motion_logo.mp4"
@@ -471,38 +495,64 @@ elif [ -f "\${USER_DOWNLOAD_LOGO_ALT}" ] && [ -s "\${USER_DOWNLOAD_LOGO_ALT}" ];
   fi
 fi
 
-# Start local web server for offline Motion Logo media
+# Start local web server for offline Motion Logo media if not running
 if command -v python3 >/dev/null 2>&1; then
   if ! pgrep -f "python3 -m http.server 18765" >/dev/null 2>&1; then
     python3 -m http.server 18765 --directory /opt/streampulse/media >/dev/null 2>&1 &
   fi
 fi
 
-TARGET_URL="${serverUrl}/rpi-kiosk?streamKey=${streamKey}"
+SERVER_URL="${serverUrl}"
+STREAM_KEY="${streamKey}"
+TARGET_URL="\${SERVER_URL}/rpi-kiosk?streamKey=\${STREAM_KEY}"
 
-exec chromium-browser \\
-  --user-data-dir="\${CHROMIUM_PROFILE_DIR}" \\
-  --kiosk \\
-  --fullscreen \\
-  --start-fullscreen \\
-  --noerrdialogs \\
-  --disable-infobars \\
-  --autoplay-policy=no-user-gesture-required \\
-  --check-for-update-interval=31536000 \\
-  --disable-component-update \\
-  --no-first-run \\
-  --disable-features=TranslateUI \\
-  --disable-save-password-bubble \\
-  --disable-restore-session-state \\
-  --disable-session-crashed-bubble \\
-  --allow-file-access-from-files \\
-  --disable-web-security \\
-  --enable-accelerated-video-decode \\
-  --enable-gpu-rasterization \\
-  --enable-zero-copy \\
-  --ignore-gpu-blocklist \\
-  --use-gl=egl \\
-  "\${TARGET_URL}"`;
+CHROMIUM_FLAGS=(
+  --user-data-dir="\${CHROMIUM_PROFILE_DIR}"
+  --kiosk
+  --start-fullscreen
+  --fullscreen
+  --noerrdialogs
+  --disable-infobars
+  --autoplay-policy=no-user-gesture-required
+  --no-first-run
+  --disable-restore-session-state
+  --disable-session-crashed-bubble
+  --enable-accelerated-video-decode
+  --enable-gpu-rasterization
+  --enable-zero-copy
+  --ignore-gpu-blocklist
+  --use-gl=egl
+  --check-for-update-interval=31536000
+  --disable-component-update
+  --disable-features=TranslateUI
+  --disable-save-password-bubble
+  --allow-file-access-from-files
+  --disable-web-security
+  --window-position=0,0
+  --window-size=1920,1080
+)
+
+echo "[StreamPulse Player] Booting StreamPulse Kiosk..."
+echo "Target Stream URL: \${TARGET_URL}"
+
+CHROMIUM_BIN=""
+if command -v chromium-browser >/dev/null 2>&1; then
+  CHROMIUM_BIN="chromium-browser"
+elif command -v chromium >/dev/null 2>&1; then
+  CHROMIUM_BIN="chromium"
+elif [ -x /usr/bin/chromium-browser ]; then
+  CHROMIUM_BIN="/usr/bin/chromium-browser"
+elif [ -x /usr/bin/chromium ]; then
+  CHROMIUM_BIN="/usr/bin/chromium"
+fi
+
+if [ -n "\${CHROMIUM_BIN}" ]; then
+  exec "\${CHROMIUM_BIN}" "\${CHROMIUM_FLAGS[@]}" "\${TARGET_URL}"
+elif command -v mpv >/dev/null 2>&1; then
+  exec mpv --hwdec=auto --fullscreen --loop-playlist=inf "\${SERVER_URL}/hls/\${STREAM_KEY}/master.m3u8"
+elif command -v cvlc >/dev/null 2>&1; then
+  exec cvlc --fullscreen --no-osd --loop "\${SERVER_URL}/hls/\${STREAM_KEY}/master.m3u8"
+fi`;
   }
 
   public generateAutoUpdateScript(serverHost: string): string {

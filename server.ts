@@ -4625,6 +4625,26 @@ async function startServer() {
     res.send(script);
   });
 
+  // Serve Motion Logo Video for RPi Offline Fallback
+  app.get('/api/rpi-player/motion-logo', async (req: any, res: any) => {
+    try {
+      const candidates = [
+        path.resolve('./data/media/motion_logo.mp4'),
+        path.resolve('./public/motion_logo.mp4'),
+        '/opt/streampulse/media/motion_logo.mp4'
+      ];
+      for (const filePath of candidates) {
+        if (fs.existsSync(filePath) && fs.statSync(filePath).size > 0) {
+          res.setHeader('Content-Type', 'video/mp4');
+          return fs.createReadStream(filePath).pipe(res);
+        }
+      }
+      res.status(404).json({ error: 'Motion logo video not found on server.' });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to stream motion logo video: ' + err.message });
+    }
+  });
+
   // ----------------------------------------------------
   // PUBLIC DEVICE-SIDE NATIVE AGENT ENDPOINTS
   // ----------------------------------------------------

@@ -211,8 +211,8 @@ if [ -f "\${BOOT_CONFIG}" ]; then
 fi
 
 echo "[4/6] Provisioning Installation Directories & Checking Local Motion Logo Asset..."
-mkdir -p /opt/streampulse/media
-chmod 755 /opt/streampulse /opt/streampulse/media
+mkdir -p /opt/streampulse/media /opt/streampulse/chromium-profile
+chmod 755 /opt/streampulse /opt/streampulse/media /opt/streampulse/chromium-profile
 
 LOCAL_MOTION_FILE="/opt/streampulse/media/motion_logo.mp4"
 USER_DOWNLOAD_LOGO="\${LOGGED_HOME}/Downloads/Motion Logo.mp4"
@@ -241,6 +241,20 @@ cat << EOF_LAUNCHER > /opt/streampulse/kiosk.sh
 export DISPLAY=\${DISPLAY:-:0}
 export WAYLAND_DISPLAY=\${WAYLAND_DISPLAY:-wayland-0}
 export XDG_RUNTIME_DIR=\${XDG_RUNTIME_DIR:-/run/user/\$(id -u)}
+
+# Dedicated StreamPulse Chromium profile directory to isolate from normal user profile
+CHROMIUM_PROFILE_DIR="/opt/streampulse/chromium-profile"
+mkdir -p "\${CHROMIUM_PROFILE_DIR}" 2>/dev/null || true
+
+# Prevent spawning duplicate Chromium kiosk windows if already running
+if pgrep -f "chromium.*--user-data-dir=/opt/streampulse/chromium-profile" >/dev/null 2>&1; then
+  echo "[StreamPulse Player] StreamPulse Chromium kiosk is already running with dedicated profile. Exiting."
+  exit 0
+fi
+
+# Clean up stale singleton lock files ONLY in our dedicated profile directory
+rm -f "\${CHROMIUM_PROFILE_DIR}"/Singleton* 2>/dev/null || true
+rm -f "\${CHROMIUM_PROFILE_DIR}"/Default/Singleton* 2>/dev/null || true
 
 # Hide mouse cursor on inactivity if unclutter is present
 if command -v unclutter >/dev/null 2>&1; then
@@ -277,10 +291,6 @@ if command -v python3 >/dev/null 2>&1; then
   fi
 fi
 
-# Clean up stale Chromium singleton locks
-rm -rf ~/.config/chromium/Singleton* 2>/dev/null || true
-rm -rf ~/.config/chromium-browser/Singleton* 2>/dev/null || true
-
 SERVER_URL="${serverUrl}"
 STREAM_KEY="${streamKey}"
 TARGET_URL="\${SERVER_URL}/rpi-kiosk?streamKey=\${STREAM_KEY}"
@@ -291,6 +301,7 @@ xset -dpms 2>/dev/null || true
 xset s noblank 2>/dev/null || true
 
 CHROMIUM_FLAGS=(
+  --user-data-dir="\${CHROMIUM_PROFILE_DIR}"
   --kiosk
   --start-fullscreen
   --fullscreen
@@ -412,6 +423,20 @@ export DISPLAY=\${DISPLAY:-:0}
 export WAYLAND_DISPLAY=\${WAYLAND_DISPLAY:-wayland-0}
 export XDG_RUNTIME_DIR=\${XDG_RUNTIME_DIR:-/run/user/1000}
 
+# Dedicated StreamPulse Chromium profile directory to isolate from normal user profile
+CHROMIUM_PROFILE_DIR="/opt/streampulse/chromium-profile"
+mkdir -p "\${CHROMIUM_PROFILE_DIR}" 2>/dev/null || true
+
+# Prevent spawning duplicate Chromium kiosk windows if already running
+if pgrep -f "chromium.*--user-data-dir=/opt/streampulse/chromium-profile" >/dev/null 2>&1; then
+  echo "[StreamPulse Player] StreamPulse Chromium kiosk is already running with dedicated profile. Exiting."
+  exit 0
+fi
+
+# Clean up stale singleton lock files ONLY in our dedicated profile directory
+rm -f "\${CHROMIUM_PROFILE_DIR}"/Singleton* 2>/dev/null || true
+rm -f "\${CHROMIUM_PROFILE_DIR}"/Default/Singleton* 2>/dev/null || true
+
 # Disable screen blanking
 xset s off 2>/dev/null || true
 xset -dpms 2>/dev/null || true
@@ -456,8 +481,10 @@ fi
 TARGET_URL="${serverUrl}/rpi-kiosk?streamKey=${streamKey}"
 
 exec chromium-browser \\
+  --user-data-dir="\${CHROMIUM_PROFILE_DIR}" \\
   --kiosk \\
   --fullscreen \\
+  --start-fullscreen \\
   --noerrdialogs \\
   --disable-infobars \\
   --autoplay-policy=no-user-gesture-required \\

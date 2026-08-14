@@ -1,6 +1,15 @@
 import fs from 'fs';
 import path from 'path';
 import { Request, Response } from 'express';
+import {
+  EMBEDDED_UNIVERSAL_FULL_INSTALL,
+  EMBEDDED_UNIVERSAL_SET_CHANNEL,
+  EMBEDDED_UNIVERSAL_VALIDATE,
+  EMBEDDED_UNIVERSAL_DIAGNOSE,
+  EMBEDDED_UNIVERSAL_BACKUP,
+  EMBEDDED_UNIVERSAL_RESTORE,
+  EMBEDDED_UNIVERSAL_UNINSTALL
+} from './rpiUniversalTemplates';
 
 const CONFIG_PATH = path.resolve(process.cwd(), 'data/rpi_player_config.json');
 
@@ -629,7 +638,10 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
     const cleanDashboardUrl = rawUrl.startsWith('http://') || rawUrl.startsWith('https://') || rawUrl.startsWith('file://') ? rawUrl : `http://${rawUrl}`;
     const rawServer = (serverHost || 'http://187.127.210.81').toString().trim();
     const cleanServerHost = rawServer.startsWith('http://') || rawServer.startsWith('https://') ? rawServer : `http://${rawServer}`;
-    const installerTemplate = safeReadTemplate('streampulse-full-installer/full-install.sh');
+    let installerTemplate = safeReadTemplate('streampulse-full-installer/full-install.sh');
+    if (!installerTemplate || installerTemplate.trim().length === 0) {
+      installerTemplate = safeReadTemplate('streampulse-universal-installer/full-install.sh') || EMBEDDED_UNIVERSAL_FULL_INSTALL;
+    }
     
     return installerTemplate
       .replace(/STREAM_KEY="live_stream"/g, () => `STREAM_KEY="${streamKey}"`)
@@ -654,8 +666,11 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
     const cleanUser = (targetUser || '').toString().trim();
 
     let installerTemplate = safeReadTemplate('streampulse-universal-installer/full-install.sh');
-    if (!installerTemplate) {
+    if (!installerTemplate || installerTemplate.trim().length === 0) {
       installerTemplate = safeReadTemplate('streampulse-full-installer/full-install.sh');
+    }
+    if (!installerTemplate || installerTemplate.trim().length === 0) {
+      installerTemplate = EMBEDDED_UNIVERSAL_FULL_INSTALL;
     }
     
     let result = installerTemplate
@@ -672,27 +687,33 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
   }
 
   public getUniversalSetChannelScript(): string {
-    return safeReadTemplate('streampulse-universal-installer/bin/set-channel.sh');
+    const s = safeReadTemplate('streampulse-universal-installer/bin/set-channel.sh');
+    return (s && s.trim().length > 0) ? s : EMBEDDED_UNIVERSAL_SET_CHANNEL;
   }
 
   public getUniversalValidateScript(): string {
-    return safeReadTemplate('streampulse-universal-installer/bin/validate.sh');
+    const s = safeReadTemplate('streampulse-universal-installer/bin/validate.sh');
+    return (s && s.trim().length > 0) ? s : EMBEDDED_UNIVERSAL_VALIDATE;
   }
 
   public getUniversalDiagnoseScript(): string {
-    return safeReadTemplate('streampulse-universal-installer/bin/diagnose.sh');
+    const s = safeReadTemplate('streampulse-universal-installer/bin/diagnose.sh');
+    return (s && s.trim().length > 0) ? s : EMBEDDED_UNIVERSAL_DIAGNOSE;
   }
 
   public getUniversalBackupScript(): string {
-    return safeReadTemplate('streampulse-universal-installer/bin/backup.sh');
+    const s = safeReadTemplate('streampulse-universal-installer/bin/backup.sh');
+    return (s && s.trim().length > 0) ? s : EMBEDDED_UNIVERSAL_BACKUP;
   }
 
   public getUniversalRestoreScript(): string {
-    return safeReadTemplate('streampulse-universal-installer/bin/restore.sh');
+    const s = safeReadTemplate('streampulse-universal-installer/bin/restore.sh');
+    return (s && s.trim().length > 0) ? s : EMBEDDED_UNIVERSAL_RESTORE;
   }
 
   public getUniversalUninstallScript(): string {
-    return safeReadTemplate('streampulse-universal-installer/uninstall.sh');
+    const s = safeReadTemplate('streampulse-universal-installer/uninstall.sh');
+    return (s && s.trim().length > 0) ? s : EMBEDDED_UNIVERSAL_UNINSTALL;
   }
 
   public renderKioskHtml(streamKey: string, serverHost: string): string {

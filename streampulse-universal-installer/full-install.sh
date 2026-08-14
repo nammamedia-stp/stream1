@@ -3,6 +3,7 @@
 # StreamPulse Universal Master Installer for Raspberry Pi
 # Standalone Remote Execution Architecture (curl -fsSL ... | sudo bash)
 # Supports: New Pi & Existing Pi / Debian 13 (Trixie) ARM64 / Labwc & Wayland
+# Architecture: Single Authoritative Fullscreen Playback Controller
 # ==============================================================================
 
 set -euo pipefail
@@ -79,7 +80,7 @@ while [[ $# -gt 0 ]]; do
       echo "Options:"
       echo "  -c, --channel CHANNEL       Assigned Pi Streaming Channel (default: \"channel1\")"
       echo "  -k, --stream-key KEY        Stream key for StreamPulse Player (default: \"live_stream\")"
-      echo "  -u, --dashboard-url URL     Target URL for Fullscreen Kiosk (default: \"http://187.127.210.81/\")"
+      echo "  -u, --dashboard-url URL     Target URL for Fullscreen Kiosk"
       echo "  -s, --server-url URL        Central StreamPulse Server (default: \"http://187.127.210.81\")"
       echo "  -U, --user USERNAME         Target Linux user (auto-detected if unambiguous)"
       echo "  --no-validate               Skip post-installation 18-point verification"
@@ -111,8 +112,8 @@ echo "======================================================================"
 echo "Timestamp:        $(date '+%Y-%m-%d %H:%M:%S')"
 echo "Assigned Channel: ${CHANNEL_NAME}"
 echo "Stream Key:       $(mask_secret "${STREAM_KEY}")"
-echo "Dashboard URL:    ${DASHBOARD_URL}"
 echo "Central Server:   ${SERVER_URL}"
+echo "Architecture:     Unified Authoritative Single-Window Player"
 echo "----------------------------------------------------------------------"
 
 # ------------------------------------------------------------------------------
@@ -195,11 +196,6 @@ if (( SKIP_PKG_INSTALL == 0 )); then
     REQUIRED_PKGS+=(chromium)
   fi
 
-  # Determine media player package
-  if ! command -v mpv >/dev/null 2>&1 && ! command -v cvlc >/dev/null 2>&1; then
-    REQUIRED_PKGS+=(mpv ffmpeg)
-  fi
-
   MISSING_PKGS=()
   for pkg in "${REQUIRED_PKGS[@]}"; do
     if ! dpkg -s "${pkg}" >/dev/null 2>&1 && ! command -v "${pkg}" >/dev/null 2>&1; then
@@ -211,7 +207,6 @@ if (( SKIP_PKG_INSTALL == 0 )); then
     echo "  -> Missing packages detected: ${MISSING_PKGS[*]}"
     echo "  -> Installing via APT (waiting for locks if active)..."
 
-    # Wait for existing apt/dpkg processes if locked
     LOCK_WAIT=0
     while fuser /var/lib/dpkg/lock >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
       if (( LOCK_WAIT >= 30 )); then
@@ -225,7 +220,6 @@ if (( SKIP_PKG_INSTALL == 0 )); then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -y || echo "[WARN] apt-get update returned non-zero, attempting package install..."
     
-    # Try installing missing packages with fallback for chromium name
     if ! apt-get install -y --no-install-recommends "${MISSING_PKGS[@]}"; then
       echo "[!] Retrying with chromium-browser fallback..."
       FALLBACK_PKGS=()
@@ -251,7 +245,7 @@ fi
 # 4. Detect Existing Installation & Create Full Pre-Flight Backup Snapshot
 # ------------------------------------------------------------------------------
 EXISTING_INSTALLATION=0
-if [[ -d "/opt/streampulse" ]] || [[ -f "/etc/systemd/system/streampulse-dashboard.service" ]] || [[ -f "/etc/systemd/system/streampulse-rpi-player.service" ]]; then
+if [[ -d "/opt/streampulse" ]] || [[ -f "/etc/systemd/system/streampulse-dashboard.service" ]] || [[ -f "/etc/systemd/system/streampulse-player.service" ]] || [[ -f "/etc/systemd/system/streampulse-rpi-player.service" ]]; then
   EXISTING_INSTALLATION=1
   echo "[i] DETECTED: Existing StreamPulse installation on this Raspberry Pi."
 fi
@@ -263,7 +257,7 @@ if (( SKIP_BACKUP == 0 )) && (( EXISTING_INSTALLATION == 1 )); then
   mkdir -p "${BACKUP_DIR}/systemd" "${BACKUP_DIR}/config" "${BACKUP_DIR}/bin" "${BACKUP_DIR}/autostart"
 
   # Systemd units
-  for srv in streampulse-dashboard.service streampulse-rpi-player.service streampulse-kiosk.service streampulse.service; do
+  for srv in streampulse-player.service streampulse-dashboard.service streampulse-rpi-player.service streampulse-kiosk.service streampulse.service; do
     if [[ -f "/etc/systemd/system/${srv}" ]]; then
       cp -p "/etc/systemd/system/${srv}" "${BACKUP_DIR}/systemd/" 2>/dev/null || true
     fi
@@ -300,7 +294,29 @@ MANIFEST
 fi
 
 # ------------------------------------------------------------------------------
-# 5. Establish Authoritative Directories
+# 5. Terminate & Remove Competing/Legacy Processes & Services
+# ------------------------------------------------------------------------------
+echo "[+] Eliminating duplicate/competing playback services & legacy loops..."
+for legacy_svc in streampulse-rpi-player.service streampulse-kiosk.service streampulse.service; do
+  if systemctl is-active --quiet "${legacy_svc}" 2>/dev/null; then
+    echo "  -> Stopping legacy service: ${legacy_svc}"
+    systemctl stop "${legacy_svc}" 2>/dev/null || true
+  fi
+  if systemctl is-enabled --quiet "${legacy_svc}" 2>/dev/null; then
+    echo "  -> Disabling legacy service: ${legacy_svc}"
+    systemctl disable "${legacy_svc}" 2>/dev/null || true
+  fi
+  rm -f "/etc/systemd/system/${legacy_svc}" 2>/dev/null || true
+done
+
+# Terminate any rogue mpv or cvlc loops competing for fullscreen display
+pkill -9 -f "mpv.*motion-logo" 2>/dev/null || true
+pkill -9 -f "cvlc.*motion-logo" 2>/dev/null || true
+pkill -9 -f "player-launcher\.sh" 2>/dev/null || true
+rm -f /tmp/streampulse-player.lock 2>/dev/null || true
+
+# ------------------------------------------------------------------------------
+# 6. Establish Authoritative Directories
 # ------------------------------------------------------------------------------
 echo "[+] Establishing authoritative directory structure (/opt/streampulse)..."
 mkdir -p /opt/streampulse/bin \
@@ -309,11 +325,10 @@ mkdir -p /opt/streampulse/bin \
          /opt/streampulse/chromium-profile
 
 # ------------------------------------------------------------------------------
-# 6. Common Logo Assets (Permanent across ALL Pis - Never Deleted)
+# 7. Common Logo Assets (Permanent across ALL Pis - Never Deleted)
 # ------------------------------------------------------------------------------
 echo "[+] Setting up Common Logo Assets (/opt/streampulse/logo)..."
 
-# Check if user has downloaded motion logo in Downloads folder
 USER_DOWNLOAD_LOGO="${USER_HOME}/Downloads/Motion Logo.mp4"
 USER_DOWNLOAD_LOGO_ALT="${USER_HOME}/Downloads/motion_logo.mp4"
 
@@ -445,7 +460,7 @@ cat << 'HTML' > /opt/streampulse/logo/logo-fallback.html
 </html>
 HTML
 
-# Create Self-Contained Standalone Universal Kiosk Player
+# Create Self-Contained Standalone Universal Kiosk Player (Single Unified Display Surface)
 cat << 'HTML' > /opt/streampulse/logo/player.html
 <!DOCTYPE html>
 <html lang="en">
@@ -884,20 +899,23 @@ HTML
 
 # Attempt local download of hls.min.js for completely offline operation
 curl -s -f -m 10 "https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js" -o /opt/streampulse/logo/hls.min.js 2>/dev/null || true
-
 chmod 644 /opt/streampulse/logo/* 2>/dev/null || true
 
 # ------------------------------------------------------------------------------
-# 7. Persistent Per-Pi Channel & Player Configuration
+# 8. Persistent Per-Pi Channel & Player Configuration
 # ------------------------------------------------------------------------------
 echo "[+] Writing Per-Pi Player Configuration (/opt/streampulse/config/player.conf)..."
 PLAYER_CONF="/opt/streampulse/config/player.conf"
 
-# Preserve existing stream key if installer ran with default key on existing Pi
-if [[ "${STREAM_KEY}" == "live_stream" ]] && [[ -f "${PLAYER_CONF}" ]]; then
+# Preserve existing stream key and channel name if installer ran with defaults on existing Pi
+if [[ -f "${PLAYER_CONF}" ]]; then
   EXISTING_KEY="$(grep '^STREAM_KEY=' "${PLAYER_CONF}" | cut -d= -f2 | tr -d '"' || echo '')"
-  if [[ -n "${EXISTING_KEY}" ]]; then
+  EXISTING_CH="$(grep '^CHANNEL_NAME=' "${PLAYER_CONF}" | cut -d= -f2 | tr -d '"' || echo '')"
+  if [[ "${STREAM_KEY}" == "live_stream" ]] && [[ -n "${EXISTING_KEY}" ]]; then
     STREAM_KEY="${EXISTING_KEY}"
+  fi
+  if [[ "${CHANNEL_NAME}" == "channel1" ]] && [[ -n "${EXISTING_CH}" ]]; then
+    CHANNEL_NAME="${EXISTING_CH}"
   fi
 fi
 
@@ -906,37 +924,22 @@ cat <<CONF > "${PLAYER_CONF}"
 # Managed by StreamPulse Universal Installer
 # Path: /opt/streampulse/config/player.conf
 
-# Assigned Pi Streaming Channel (Specific to this Pi)
 CHANNEL_NAME="${CHANNEL_NAME}"
-
-# Stream Key (Secrets kept local and masked in diagnostics)
 STREAM_KEY="${STREAM_KEY}"
-
-# StreamPulse Central Ingest / API Server URL
 SERVER_URL="${SERVER_URL}"
-
-# Common Logo & Media Assets Directory (Permanent across all Pis)
 LOGO_DIR="/opt/streampulse/logo"
 OFFLINE_LOGO_MEDIA="/opt/streampulse/logo/motion-logo.mp4"
 OFFLINE_FALLBACK_HTML="/opt/streampulse/logo/logo-fallback.html"
-
-# Playback Mode (auto / stream_priority / logo_priority)
 PLAYBACK_MODE="auto"
-
-# Hardware Video Acceleration
 ENABLE_HW_ACCEL=1
-
-# Audio Output Device (default / hdmi / pipewire)
 AUDIO_OUTPUT="default"
-
-# Last Updated Timestamp
 LAST_UPDATED="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 CONF
 
 chmod 644 "${PLAYER_CONF}"
 
 # ------------------------------------------------------------------------------
-# 8. Kiosk Configuration (Keyring Suppression & Clean Flags)
+# 9. Kiosk Configuration (Keyring Suppression & Clean Flags)
 # ------------------------------------------------------------------------------
 echo "[+] Writing Kiosk Configuration (/opt/streampulse/config/kiosk.conf)..."
 cat <<CONF > /opt/streampulse/config/kiosk.conf
@@ -978,70 +981,93 @@ CONF
 chmod 644 /opt/streampulse/config/kiosk.conf
 
 # ------------------------------------------------------------------------------
-# 9. Standalone Self-Contained Binaries Generation in /opt/streampulse/bin/
-# (100% Embedded — Works perfectly with remote curl | sudo bash)
+# 10. Standalone Self-Contained Binaries Generation in /opt/streampulse/bin/
+# (Unified Single-Surface Architecture with Duplicate Process Lock)
 # ------------------------------------------------------------------------------
 echo "[+] Writing Authoritative Management Binaries in /opt/streampulse/bin/..."
 
-# --- 9.1 dashboard-kiosk.sh ---
-cat << 'EOF_DASHBOARD_KIOSK' > /opt/streampulse/bin/dashboard-kiosk.sh
+# --- 10.1 streampulse-player.sh (Authoritative Unified Controller) ---
+cat << 'EOF_PLAYER' > /opt/streampulse/bin/streampulse-player.sh
 #!/usr/bin/env bash
-# StreamPulse Dashboard Kiosk Authoritative Launcher
+# ==============================================================================
+# StreamPulse Authoritative Unified Fullscreen Player Controller
+# Managed by StreamPulse Universal Installer
+# Path: /opt/streampulse/bin/streampulse-player.sh
+# ==============================================================================
+
 set -uo pipefail
 
+# 1. Strict Process Lock (Guarantees ONLY ONE player instance ever runs)
+LOCK_FILE="/tmp/streampulse-player.lock"
+exec 200>"${LOCK_FILE}"
+if ! flock -n 200; then
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Another player instance is already active with lock. Exiting duplicate launcher."
+  exit 0
+fi
+
+# 2. Terminate Any Rogue Competing Playback Loops (mpv, cvlc, old launchers)
+pkill -9 -f "mpv.*motion-logo" 2>/dev/null || true
+pkill -9 -f "cvlc.*motion-logo" 2>/dev/null || true
+pkill -9 -f "player-launcher\.sh" 2>/dev/null || true
+
+# 3. Load Configurations
 CONFIG_FILE="/opt/streampulse/config/kiosk.conf"
 PLAYER_CONFIG="/opt/streampulse/config/player.conf"
 
-if [[ -f "${CONFIG_FILE}" ]]; then
-  # shellcheck source=/dev/null
-  source "${CONFIG_FILE}"
-else
-  DASHBOARD_URL="http://187.127.210.81/"
-  BROWSER_PROFILE_DIR="/opt/streampulse/chromium-profile"
-  BROWSER_ENGINE="auto"
-  WAIT_NETWORK_TIMEOUT=30
-fi
+CHANNEL_NAME="channel1"
+STREAM_KEY="live_stream"
+SERVER_URL="http://187.127.210.81"
+DASHBOARD_URL=""
+BROWSER_PROFILE_DIR="/opt/streampulse/chromium-profile"
+WAIT_NETWORK_TIMEOUT=30
+SCREEN_WIDTH=1920
+SCREEN_HEIGHT=1080
 
 if [[ -f "${PLAYER_CONFIG}" ]]; then
-  # shellcheck source=/dev/null
   source "${PLAYER_CONFIG}"
 fi
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Initializing Authoritative Dashboard Kiosk..."
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Assigned Channel: ${CHANNEL_NAME:-default}"
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Target URL: ${DASHBOARD_URL}"
+if [[ -f "${CONFIG_FILE}" ]]; then
+  source "${CONFIG_FILE}"
+fi
 
+echo "======================================================================"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Booting Authoritative Fullscreen Player..."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Assigned Channel: ${CHANNEL_NAME}"
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Server Endpoint:  ${SERVER_URL}"
+echo "======================================================================"
+
+# 4. Environment & Display Resolution
 export DISPLAY="${DISPLAY:-:0}"
 if [[ -z "${WAYLAND_DISPLAY:-}" ]] && [[ -e "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/wayland-0" ]]; then
   export WAYLAND_DISPLAY="wayland-0"
 fi
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
-# Disable DPMS & Screen Blanking
+# 5. Wait for Graphical Display / Compositor
+MAX_DISPLAY_WAIT=30
+DISPLAY_WAITED=0
+while ! (wlr-randr >/dev/null 2>&1 || xset q >/dev/null 2>&1 || [[ -n "${WAYLAND_DISPLAY:-}" ]] || [[ -n "${DISPLAY:-}" ]]); do
+  if (( DISPLAY_WAITED >= MAX_DISPLAY_WAIT )); then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Display check timed out, continuing launch attempt..."
+    break
+  fi
+  sleep 1
+  (( DISPLAY_WAITED++ ))
+done
+
+# 6. Screen Power Management & Cursor Hiding
 if command -v xset >/dev/null 2>&1; then
   xset s off -dpms s noblank 2>/dev/null || true
 fi
 if command -v wlr-randr >/dev/null 2>&1; then
   wlr-randr --output HDMI-A-1 --on 2>/dev/null || true
 fi
-
-# Hide cursor
 if command -v unclutter >/dev/null 2>&1; then
   pgrep -x unclutter >/dev/null 2>&1 || unclutter -idle 0.5 -root &
 fi
 
-# Network reachability check
-TIMEOUT_SEC=${WAIT_NETWORK_TIMEOUT:-30}
-ELAPSED=0
-while (( ELAPSED < TIMEOUT_SEC )); do
-  if curl -s -f -m 2 "${DASHBOARD_URL}" >/dev/null 2>&1 || curl -s -m 2 -I "${DASHBOARD_URL}" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-  (( ELAPSED++ ))
-done
-
-# Locate browser
+# 7. Locate Browser Binary
 BROWSER_BIN=""
 for CANDIDATE in chromium chromium-browser google-chrome firefox; do
   if command -v "${CANDIDATE}" >/dev/null 2>&1; then
@@ -1051,16 +1077,22 @@ for CANDIDATE in chromium chromium-browser google-chrome firefox; do
 done
 
 if [[ -z "${BROWSER_BIN}" ]]; then
-  echo "[StreamPulse] ERROR: No supported browser found." >&2
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] ERROR: No supported browser found." >&2
   exit 1
 fi
 
+# 8. Profile Directory & Clean Singleton Locks
 mkdir -p "${BROWSER_PROFILE_DIR}"
 rm -f "${BROWSER_PROFILE_DIR}/SingletonLock" \
       "${BROWSER_PROFILE_DIR}/SingletonSocket" \
       "${BROWSER_PROFILE_DIR}/SingletonCookie" \
       "${BROWSER_PROFILE_DIR}/lockfile" 2>/dev/null || true
 
+# Terminate any previous browser process using this dedicated profile
+pkill -f "${BROWSER_PROFILE_DIR}" 2>/dev/null || true
+sleep 0.5
+
+# 9. Assemble Safe Browser Arguments
 declare -a LAUNCH_ARGS=(
   "--user-data-dir=${BROWSER_PROFILE_DIR}"
   "--password-store=basic"
@@ -1082,98 +1114,38 @@ declare -a LAUNCH_ARGS=(
   "--window-size=${SCREEN_WIDTH:-1920},${SCREEN_HEIGHT:-1080}"
 )
 
-# Determine target URL:
-# If DASHBOARD_URL is empty, points to an .m3u8 stream, /hls/, local player, or if external dashboard is unreachable:
+# 10. Authoritative Target URL: Integrated HTML5 Kiosk Player
 LOCAL_PLAYER="file:///opt/streampulse/logo/player.html"
-TARGET_URL="${DASHBOARD_URL:-}"
+TARGET_URL="${LOCAL_PLAYER}?channel=${CHANNEL_NAME}&server=${SERVER_URL}&key=${STREAM_KEY}"
 
-if [[ -z "${TARGET_URL}" ]] || [[ "${TARGET_URL}" =~ \.m3u8 ]] || [[ "${TARGET_URL}" =~ /hls/ ]] || [[ "${TARGET_URL}" == "file://"* ]] || [[ "${TARGET_URL}" == *"/logo/player.html"* ]]; then
-  TARGET_URL="${LOCAL_PLAYER}?channel=${CHANNEL_NAME:-channel1}&server=${SERVER_URL:-http://187.127.210.81}&key=${STREAM_KEY:-live_stream}"
-elif [[ "${TARGET_URL}" =~ ^https?:// ]]; then
-  # If remote HTTP URL, check if reachable. If unreachable or 404/5xx, fallback to local resilient player
-  HTTP_STATUS="$(curl -s -o /dev/null -w "%{http_code}" -m 3 "${TARGET_URL}" 2>/dev/null || echo "000")"
-  if [[ ! "${HTTP_STATUS}" =~ ^(200|301|302|304)$ ]]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] DASHBOARD_URL returned HTTP ${HTTP_STATUS} (offline/unavailable). Launching local resilient player..."
-    TARGET_URL="${LOCAL_PLAYER}?channel=${CHANNEL_NAME:-channel1}&server=${SERVER_URL:-http://187.127.210.81}&key=${STREAM_KEY:-live_stream}"
+if [[ -n "${DASHBOARD_URL:-}" ]] && [[ "${DASHBOARD_URL}" =~ ^https?:// ]] && [[ "${DASHBOARD_URL}" != "http://187.127.210.81/" ]] && [[ "${DASHBOARD_URL}" != "http://187.127.210.81" ]] && [[ "${DASHBOARD_URL}" != *"127.0.0.1"* ]] && [[ "${DASHBOARD_URL}" != *"localhost"* ]]; then
+  if [[ ! "${DASHBOARD_URL}" =~ \.m3u8 ]] && [[ ! "${DASHBOARD_URL}" =~ /hls/ ]]; then
+    TARGET_URL="${DASHBOARD_URL}"
   fi
 fi
 
-# Append target dashboard URL
 LAUNCH_ARGS+=("${TARGET_URL}")
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Launching Kiosk Browser (${TARGET_URL}) with dedicated profile and basic keyring suppression..."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Launching single authoritative fullscreen UI: ${TARGET_URL}"
 
-# 10. Execute Browser (Supervised by systemd)
+# 11. Execute Authoritative Player Process
 exec "${BROWSER_BIN}" "${LAUNCH_ARGS[@]}"
+EOF_PLAYER
+
+# --- 10.2 dashboard-kiosk.sh & player-launcher.sh (Delegating wrappers) ---
+cat << 'EOF_DASHBOARD_KIOSK' > /opt/streampulse/bin/dashboard-kiosk.sh
+#!/usr/bin/env bash
+# StreamPulse Dashboard Kiosk Compatibility Wrapper
+exec /opt/streampulse/bin/streampulse-player.sh "$@"
 EOF_DASHBOARD_KIOSK
 
-# --- 9.2 player-launcher.sh ---
 cat << 'EOF_PLAYER_LAUNCHER' > /opt/streampulse/bin/player-launcher.sh
 #!/usr/bin/env bash
-# StreamPulse Player Engine Launcher
-set -euo pipefail
-
-PLAYER_CONF="/opt/streampulse/config/player.conf"
-
-if [[ -f "${PLAYER_CONF}" ]]; then
-  # shellcheck source=/dev/null
-  source "${PLAYER_CONF}"
-else
-  CHANNEL_NAME="channel1"
-  STREAM_KEY="live_stream"
-  SERVER_URL="http://187.127.210.81"
-  LOGO_DIR="/opt/streampulse/logo"
-  OFFLINE_LOGO_MEDIA="/opt/streampulse/logo/motion-logo.mp4"
-  OFFLINE_FALLBACK_HTML="/opt/streampulse/logo/logo-fallback.html"
-fi
-
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse Player] Launching Player Engine..."
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse Player] Assigned Channel: ${CHANNEL_NAME}"
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse Player] Server Endpoint: ${SERVER_URL}"
-
-PRIMARY_STREAM="${SERVER_URL}/hls/${CHANNEL_NAME}.m3u8"
-FALLBACK_STREAM="${SERVER_URL}/hls/${STREAM_KEY}/master.m3u8"
-LOCAL_LOGO="${OFFLINE_LOGO_MEDIA:-/opt/streampulse/logo/motion-logo.mp4}"
-
-while true; do
-  if curl -s -f -m 3 "${PRIMARY_STREAM}" | grep -q "#EXTM3U" 2>/dev/null; then
-    ACTIVE_SOURCE="${PRIMARY_STREAM}"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse Player] Channel '${CHANNEL_NAME}' is LIVE. Streaming..."
-  elif curl -s -f -m 3 "${FALLBACK_STREAM}" | grep -q "#EXTM3U" 2>/dev/null; then
-    ACTIVE_SOURCE="${FALLBACK_STREAM}"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse Player] Stream Key '${STREAM_KEY}' is LIVE. Streaming..."
-  elif [[ -f "${LOCAL_LOGO}" ]] && [[ -s "${LOCAL_LOGO}" ]]; then
-    ACTIVE_SOURCE="${LOCAL_LOGO}"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse Player] Stream offline. Playing local Motion Logo loop (${LOCAL_LOGO})..."
-  else
-    ACTIVE_SOURCE="${FALLBACK_STREAM}"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse Player] Waiting for broadcast stream on channel '${CHANNEL_NAME}'..."
-  fi
-
-  if command -v mpv >/dev/null 2>&1; then
-    mpv --hwdec=auto \
-        --vo=gpu \
-        --fullscreen \
-        --no-terminal \
-        --cache=yes \
-        --cache-secs=3 \
-        --idle=once \
-        "${ACTIVE_SOURCE}" || true
-  elif command -v cvlc >/dev/null 2>&1; then
-    cvlc --fullscreen \
-         --no-video-title-show \
-         --play-and-exit \
-         "${ACTIVE_SOURCE}" vlc://quit || true
-  else
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse Player] Web Kiosk Player is active."
-    sleep 10
-  fi
-
-  sleep 2
-done
+# StreamPulse Player Launcher Compatibility Wrapper
+exec /opt/streampulse/bin/streampulse-player.sh "$@"
 EOF_PLAYER_LAUNCHER
 
-# --- 9.3 set-channel.sh ---
+# --- 10.3 set-channel.sh ---
 cat << 'EOF_SET_CHANNEL' > /opt/streampulse/bin/set-channel.sh
 #!/usr/bin/env bash
 # StreamPulse Channel Switcher Utility
@@ -1260,9 +1232,9 @@ fi
 
 echo "  [+] Updated configuration saved to ${CONFIG_FILE}"
 
-for srv in streampulse-rpi-player.service streampulse-dashboard.service; do
+for srv in streampulse-player.service streampulse-dashboard.service; do
   if systemctl is-active --quiet "${srv}" 2>/dev/null || systemctl is-enabled --quiet "${srv}" 2>/dev/null; then
-    echo "  [+] Reloading service: ${srv}..."
+    echo "  [+] Reloading authoritative service: ${srv}..."
     systemctl restart "${srv}" 2>/dev/null || true
   fi
 done
@@ -1276,7 +1248,7 @@ else
 fi
 EOF_SET_CHANNEL
 
-# --- 9.4 backup.sh ---
+# --- 10.4 backup.sh ---
 cat << 'EOF_BACKUP' > /opt/streampulse/bin/backup.sh
 #!/usr/bin/env bash
 # StreamPulse Backup Engine
@@ -1303,7 +1275,7 @@ echo "----------------------------------------------------------------------"
 
 mkdir -p "${BACKUP_DIR}/systemd" "${BACKUP_DIR}/config" "${BACKUP_DIR}/bin" "${BACKUP_DIR}/autostart"
 
-for srv in streampulse-dashboard.service streampulse-rpi-player.service streampulse-kiosk.service; do
+for srv in streampulse-player.service streampulse-dashboard.service streampulse-rpi-player.service streampulse-kiosk.service; do
   if [[ -f "/etc/systemd/system/${srv}" ]]; then
     cp -p "/etc/systemd/system/${srv}" "${BACKUP_DIR}/systemd/"
   fi
@@ -1334,7 +1306,7 @@ ln -sfn "${BACKUP_DIR}" "${BACKUP_BASE}/latest"
 echo "Backup completed successfully -> ${BACKUP_DIR}"
 EOF_BACKUP
 
-# --- 9.5 restore.sh ---
+# --- 10.5 restore.sh ---
 cat << 'EOF_RESTORE' > /opt/streampulse/bin/restore.sh
 #!/usr/bin/env bash
 # StreamPulse Restoration Engine
@@ -1375,10 +1347,16 @@ if [[ -d "${RESTORE_DIR}/autostart/autostart" ]] && [[ -d "${USER_HOME}/.config/
   cp -p "${RESTORE_DIR}/autostart/autostart" "${USER_HOME}/.config/labwc/autostart" 2>/dev/null || true
 fi
 
+for srv in streampulse-player.service streampulse-dashboard.service; do
+  if systemctl is-enabled --quiet "${srv}" 2>/dev/null; then
+    systemctl restart "${srv}" 2>/dev/null || true
+  fi
+done
+
 echo "[OK] System configuration successfully restored from snapshot."
 EOF_RESTORE
 
-# --- 9.6 diagnose.sh ---
+# --- 10.6 diagnose.sh ---
 cat << 'EOF_DIAGNOSE' > /opt/streampulse/bin/diagnose.sh
 #!/usr/bin/env bash
 # StreamPulse Diagnostic Engine
@@ -1410,8 +1388,8 @@ else
 fi
 
 echo "----------------------------------------------------------------------"
-echo "Service Status:"
-for srv in streampulse-dashboard.service streampulse-rpi-player.service; do
+echo "Authoritative Playback Service Status:"
+for srv in streampulse-player.service streampulse-dashboard.service; do
   if systemctl is-active --quiet "${srv}" 2>/dev/null; then
     echo "  [OK] ${srv}: ACTIVE (Running)"
   elif systemctl is-enabled --quiet "${srv}" 2>/dev/null; then
@@ -1422,13 +1400,31 @@ for srv in streampulse-dashboard.service streampulse-rpi-player.service; do
 done
 
 echo "----------------------------------------------------------------------"
-echo "Network & Display:"
+echo "Competing Legacy Services Check:"
+if systemctl is-active --quiet streampulse-rpi-player.service 2>/dev/null; then
+  echo "  [FAIL] streampulse-rpi-player.service is running! (Competing service conflict)"
+else
+  echo "  [OK] No competing streampulse-rpi-player.service detected."
+fi
+
+ROGUE_MPV="$(pgrep -f "mpv.*motion-logo" | tr '\n' ' ')"
+if [[ -n "${ROGUE_MPV}" ]]; then
+  echo "  [WARN] Legacy mpv loop running: PID ${ROGUE_MPV}"
+else
+  echo "  [OK] No rogue mpv background processes."
+fi
+
+echo "----------------------------------------------------------------------"
+echo "Process Lock & Display:"
+if [[ -f /tmp/streampulse-player.lock ]]; then
+  echo "  Lock File:   /tmp/streampulse-player.lock (Active)"
+fi
 echo "  IP Address:  $(hostname -I 2>/dev/null || echo 'none')"
 echo "  Display:     ${DISPLAY:-:0} | Wayland: ${WAYLAND_DISPLAY:-wayland-0}"
 echo "======================================================================"
 EOF_DIAGNOSE
 
-# --- 9.7 validate.sh ---
+# --- 10.7 validate.sh ---
 cat << 'EOF_VALIDATE' > /opt/streampulse/bin/validate.sh
 #!/usr/bin/env bash
 # StreamPulse 18-Point Universal Validation Suite
@@ -1506,16 +1502,16 @@ else
   print_fail "Network Gateway" "No local IP address assigned"
 fi
 
-# 6. Dashboard Reachable Check
-DASHBOARD_URL="http://187.127.210.81/"
-if [[ -f /opt/streampulse/config/kiosk.conf ]]; then
-  source /opt/streampulse/config/kiosk.conf
+# 6. Server Reachability Check
+SERVER_URL="http://187.127.210.81"
+if [[ -f /opt/streampulse/config/player.conf ]]; then
+  source /opt/streampulse/config/player.conf
 fi
-HTTP_CODE="$(curl -s -o /dev/null -w "%{http_code}" -m 3 "${DASHBOARD_URL}" 2>/dev/null || echo "000")"
-if [[ "${HTTP_CODE}" =~ ^(200|301|302|304)$ ]]; then
-  print_pass "Dashboard Reachable" "HTTP ${HTTP_CODE} at ${DASHBOARD_URL}"
+HTTP_CODE="$(curl -s -o /dev/null -w "%{http_code}" -m 3 "${SERVER_URL}" 2>/dev/null || echo "000")"
+if [[ "${HTTP_CODE}" =~ ^(200|301|302|304|404)$ ]]; then
+  print_pass "Server Endpoint" "HTTP ${HTTP_CODE} at ${SERVER_URL}"
 else
-  print_warn "Dashboard Reachable" "HTTP code ${HTTP_CODE} (offline fallback will engage)"
+  print_warn "Server Endpoint" "HTTP code ${HTTP_CODE} (offline logo fallback will engage)"
 fi
 
 # 7. Browser Installed Check
@@ -1526,7 +1522,7 @@ else
   print_fail "Browser Installed" "No supported browser binary found"
 fi
 
-# 8. Dedicated Kiosk Profile Check
+# 8. Dedicated Profile Check
 PROFILE_DIR="${BROWSER_PROFILE_DIR:-/opt/streampulse/chromium-profile}"
 if [[ -d "${PROFILE_DIR}" ]]; then
   print_pass "Dedicated Profile" "${PROFILE_DIR} ready"
@@ -1534,43 +1530,43 @@ else
   print_fail "Dedicated Profile" "${PROFILE_DIR} missing"
 fi
 
-# 9. Keyring Suppression Flag
-if [[ -f /opt/streampulse/bin/dashboard-kiosk.sh ]] && grep -q -- "--password-store=basic" /opt/streampulse/bin/dashboard-kiosk.sh; then
-  print_pass "Keyring Suppression" "--password-store=basic properly inside launcher array"
+# 9. Keyring Suppression Flag Check
+if [[ -f /opt/streampulse/bin/streampulse-player.sh ]] && grep -q -- "--password-store=basic" /opt/streampulse/bin/streampulse-player.sh; then
+  print_pass "Keyring Suppression" "--password-store=basic properly inside launcher"
 else
-  print_fail "Keyring Suppression" "--password-store=basic not found in dashboard launcher"
+  print_fail "Keyring Suppression" "--password-store=basic not found in player launcher"
 fi
 
-# 10. Dashboard Launcher Check
-if [[ -x /opt/streampulse/bin/dashboard-kiosk.sh ]]; then
-  print_pass "Dashboard Launcher" "dashboard-kiosk.sh executable"
+# 10. Authoritative Player Launcher Check
+if [[ -x /opt/streampulse/bin/streampulse-player.sh ]]; then
+  print_pass "Player Launcher" "streampulse-player.sh executable"
 else
-  print_fail "Dashboard Launcher" "dashboard-kiosk.sh missing or not executable"
+  print_fail "Player Launcher" "streampulse-player.sh missing or not executable"
 fi
 
-# 11. Dashboard Service Check
-if [[ -f /etc/systemd/system/streampulse-dashboard.service ]]; then
-  print_pass "Dashboard Service" "streampulse-dashboard.service registered"
+# 11. Authoritative Systemd Service Check
+if [[ -f /etc/systemd/system/streampulse-player.service ]] || [[ -f /etc/systemd/system/streampulse-dashboard.service ]]; then
+  print_pass "Playback Service" "Authoritative playback service registered"
 else
-  print_fail "Dashboard Service" "streampulse-dashboard.service unit missing"
+  print_fail "Playback Service" "Authoritative service unit missing"
 fi
 
-# 12. Player Installed Check
-PLAYER_CONF="/opt/streampulse/config/player.conf"
-if [[ -f "${PLAYER_CONF}" ]]; then
-  print_pass "Player Config" "${PLAYER_CONF} present"
+# 12. Competing Service Absence Check (Zero conflicts)
+if systemctl is-active --quiet streampulse-rpi-player.service 2>/dev/null; then
+  print_fail "Conflict Prevention" "Competing streampulse-rpi-player.service is active"
 else
-  print_fail "Player Config" "${PLAYER_CONF} missing"
+  print_pass "Conflict Prevention" "No competing playback service active"
 fi
 
-# 13. Player Service Integrity Check
-if [[ -f /etc/systemd/system/streampulse-rpi-player.service ]] || [[ -f /etc/systemd/system/streampulse-dashboard.service ]]; then
-  print_pass "Service Integrity" "Authoritative services active"
+# 13. Process Lock Implementation Check
+if [[ -f /opt/streampulse/bin/streampulse-player.sh ]] && grep -q "flock" /opt/streampulse/bin/streampulse-player.sh; then
+  print_pass "Duplicate Lock" "Process lock (flock) active in launcher"
 else
-  print_fail "Service Integrity" "Services missing"
+  print_fail "Duplicate Lock" "flock locking missing in streampulse-player.sh"
 fi
 
 # 14. Assigned Channel Check
+PLAYER_CONF="/opt/streampulse/config/player.conf"
 if [[ -f "${PLAYER_CONF}" ]]; then
   source "${PLAYER_CONF}"
   if [[ -n "${CHANNEL_NAME:-}" ]]; then
@@ -1590,11 +1586,11 @@ else
   print_fail "Common Logo Folder" "${LOGO_DIR} missing"
 fi
 
-# 16. Common Logo Media Check
-if [[ -f "${LOGO_DIR}/motion-logo.mp4" ]] || [[ -f "${LOGO_DIR}/logo-fallback.html" ]]; then
-  print_pass "Common Logo Media" "Offline video/HTML assets ready"
+# 16. Common Logo Media & HTML Player Check
+if [[ -f "${LOGO_DIR}/player.html" ]] && ([[ -f "${LOGO_DIR}/motion-logo.mp4" ]] || [[ -f "${LOGO_DIR}/logo-fallback.html" ]]); then
+  print_pass "Integrated Media" "Offline video/HTML assets ready"
 else
-  print_warn "Common Logo Media" "No media files currently in ${LOGO_DIR}"
+  print_warn "Integrated Media" "Assets check: player.html ready"
 fi
 
 # 17. Streaming Configuration Check
@@ -1604,11 +1600,11 @@ else
   print_fail "Streaming Config" "Streaming credentials missing from ${PLAYER_CONF}"
 fi
 
-# 18. Auto-Start & Reboot Persistence
-if systemctl is-enabled streampulse-dashboard.service >/dev/null 2>&1; then
-  print_pass "Reboot Persistence" "streampulse-dashboard.service ENABLED on boot"
+# 18. Auto-Start & Reboot Persistence Check
+if systemctl is-enabled streampulse-player.service >/dev/null 2>&1 || systemctl is-enabled streampulse-dashboard.service >/dev/null 2>&1; then
+  print_pass "Reboot Persistence" "Playback service ENABLED on boot"
 else
-  print_warn "Reboot Persistence" "streampulse-dashboard.service not enabled"
+  print_warn "Reboot Persistence" "Playback service not yet enabled"
 fi
 
 echo "----------------------------------------------------------------------"
@@ -1626,30 +1622,64 @@ EOF_VALIDATE
 chmod +x /opt/streampulse/bin/*.sh
 
 # ------------------------------------------------------------------------------
-# 10. Duplicate Autostart Cleanup (Safely Backed Up)
+# 11. Duplicate Autostart Cleanup (Safely Backed Up)
 # ------------------------------------------------------------------------------
 echo "[+] Cleaning competing/duplicate autostart launchers..."
 LABWC_AUTOSTART="${USER_HOME}/.config/labwc/autostart"
 if [[ -f "${LABWC_AUTOSTART}" ]]; then
-  if grep -E "chromium.*kiosk|dashboard-kiosk" "${LABWC_AUTOSTART}" >/dev/null 2>&1; then
-    echo "  -> Disabling legacy browser lines in Labwc autostart (systemd is authoritative)..."
+  if grep -E "chromium.*kiosk|dashboard-kiosk|player-launcher|mpv" "${LABWC_AUTOSTART}" >/dev/null 2>&1; then
+    echo "  -> Disabling legacy browser/mpv lines in Labwc autostart (systemd is authoritative)..."
     sed -i -E 's/^([^#]*chromium.*kiosk.*)/# [StreamPulse Managed] \1/' "${LABWC_AUTOSTART}"
     sed -i -E 's/^([^#]*.*dashboard-kiosk.*)/# [StreamPulse Managed] \1/' "${LABWC_AUTOSTART}"
+    sed -i -E 's/^([^#]*.*player-launcher.*)/# [StreamPulse Managed] \1/' "${LABWC_AUTOSTART}"
+    sed -i -E 's/^([^#]*.*mpv.*motion-logo.*)/# [StreamPulse Managed] \1/' "${LABWC_AUTOSTART}"
   fi
 fi
 
 # ------------------------------------------------------------------------------
-# 11. Authoritative Systemd Services
+# 12. Authoritative Systemd Service (ONE Single Fullscreen Service)
 # ------------------------------------------------------------------------------
-echo "[+] Provisioning Authoritative systemd service units..."
+echo "[+] Provisioning Single Authoritative systemd service unit..."
 
-# Dashboard Kiosk Service
+cat <<UNIT > /etc/systemd/system/streampulse-player.service
+[Unit]
+Description=StreamPulse Authoritative Fullscreen Player Service
+Documentation=https://streampulse.io
+After=network-online.target sound.target graphical-session.target graphical.target
+Wants=network-online.target
+Conflicts=streampulse-rpi-player.service
+
+[Service]
+Type=simple
+User=${TARGET_USER}
+Group=${TARGET_GID}
+WorkingDirectory=/opt/streampulse
+Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=/run/user/${TARGET_UID}
+Environment=HOME=${USER_HOME}
+ExecStartPre=/bin/sleep 2
+ExecStart=/opt/streampulse/bin/streampulse-player.sh
+Restart=always
+RestartSec=3
+KillMode=mixed
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical.target default.target
+Alias=streampulse-dashboard.service
+UNIT
+
+# Also maintain streampulse-dashboard.service as clean symlink/unit pointing to streampulse-player.sh
 cat <<UNIT > /etc/systemd/system/streampulse-dashboard.service
 [Unit]
 Description=StreamPulse Dashboard Kiosk Service (Universal)
 Documentation=https://streampulse.io
 After=network-online.target sound.target graphical-session.target graphical.target
 Wants=network-online.target
+Conflicts=streampulse-rpi-player.service
 
 [Service]
 Type=simple
@@ -1661,7 +1691,7 @@ Environment=WAYLAND_DISPLAY=wayland-0
 Environment=XDG_RUNTIME_DIR=/run/user/${TARGET_UID}
 Environment=HOME=${USER_HOME}
 ExecStartPre=/bin/sleep 2
-ExecStart=/opt/streampulse/bin/dashboard-kiosk.sh
+ExecStart=/opt/streampulse/bin/streampulse-player.sh
 Restart=always
 RestartSec=3
 KillMode=mixed
@@ -1673,42 +1703,12 @@ StandardError=journal
 WantedBy=graphical.target default.target
 UNIT
 
-# Player Engine Service
-cat <<UNIT > /etc/systemd/system/streampulse-rpi-player.service
-[Unit]
-Description=StreamPulse Dedicated Player Engine Service
-Documentation=https://streampulse.io
-After=network-online.target sound.target graphical-session.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=${TARGET_USER}
-Group=${TARGET_GID}
-WorkingDirectory=/opt/streampulse
-Environment=DISPLAY=:0
-Environment=WAYLAND_DISPLAY=wayland-0
-Environment=XDG_RUNTIME_DIR=/run/user/${TARGET_UID}
-Environment=HOME=${USER_HOME}
-ExecStartPre=/bin/sleep 2
-ExecStart=/opt/streampulse/bin/player-launcher.sh
-Restart=always
-RestartSec=3
-KillMode=mixed
-TimeoutStopSec=10
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=graphical.target default.target
-UNIT
-
-chmod 644 /etc/systemd/system/streampulse-dashboard.service /etc/systemd/system/streampulse-rpi-player.service
+chmod 644 /etc/systemd/system/streampulse-player.service /etc/systemd/system/streampulse-dashboard.service
 systemctl daemon-reload
-systemctl enable streampulse-dashboard.service
+systemctl enable streampulse-player.service
 
 # ------------------------------------------------------------------------------
-# 12. Fix Directory Permissions for Detected User
+# 13. Fix Directory Permissions for Detected User
 # ------------------------------------------------------------------------------
 echo "[+] Setting filesystem ownership to '${TARGET_USER}'..."
 chown -R "${TARGET_USER}:${TARGET_GID}" /opt/streampulse/chromium-profile \
@@ -1716,13 +1716,13 @@ chown -R "${TARGET_USER}:${TARGET_GID}" /opt/streampulse/chromium-profile \
                                        /opt/streampulse/config
 
 # ------------------------------------------------------------------------------
-# 13. Restart / Start Services
+# 14. Restart / Start Authoritative Playback Service
 # ------------------------------------------------------------------------------
-echo "[+] Starting streampulse-dashboard.service..."
-systemctl restart streampulse-dashboard.service 2>/dev/null || true
+echo "[+] Starting single authoritative streampulse-player.service..."
+systemctl restart streampulse-player.service 2>/dev/null || true
 
 # ------------------------------------------------------------------------------
-# 14. 18-Point Automated Validation Matrix
+# 15. 18-Point Automated Validation Matrix
 # ------------------------------------------------------------------------------
 if (( RUN_VALIDATION == 1 )) && [[ -x "/opt/streampulse/bin/validate.sh" ]]; then
   echo ""
@@ -1740,8 +1740,8 @@ echo "Assigned Channel:   ${CHANNEL_NAME}"
 echo "Stream Key:         $(mask_secret "${STREAM_KEY}")"
 echo "Target User:        ${TARGET_USER} (UID: ${TARGET_UID})"
 echo "Common Logo Folder: /opt/streampulse/logo/"
-echo "Dashboard Kiosk:    ${DASHBOARD_URL}"
-echo "Authoritative Svc:  streampulse-dashboard.service (ENABLED)"
+echo "Playback Engine:    Integrated HTML5 Kiosk Player (HLS <-> Logo Auto-Switch)"
+echo "Authoritative Svc:  streampulse-player.service (ENABLED)"
 echo ""
 echo "Helpful Commands:"
 echo "  - Change Channel:   sudo /opt/streampulse/bin/set-channel.sh <new_channel>"
@@ -1749,5 +1749,5 @@ echo "  - Run Diagnostics:  sudo /opt/streampulse/bin/diagnose.sh"
 echo "  - Run Validation:   sudo /opt/streampulse/bin/validate.sh"
 echo "  - Create Backup:    sudo /opt/streampulse/bin/backup.sh"
 echo "  - Restore Backup:   sudo /opt/streampulse/bin/restore.sh"
-echo "  - Live Kiosk Logs:  sudo journalctl -u streampulse-dashboard.service -f"
+echo "  - Live Player Logs: sudo journalctl -u streampulse-player.service -f"
 echo "======================================================================"

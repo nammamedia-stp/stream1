@@ -1,5 +1,5 @@
 [Unit]
-Description=StreamPulse Dashboard Kiosk Service (Universal)
+Description=StreamPulse Authoritative Fullscreen Player Service
 Documentation=https://streampulse.io
 After=network-online.target sound.target graphical-session.target graphical.target
 Wants=network-online.target
@@ -25,3 +25,4 @@ StandardError=journal
 
 [Install]
 WantedBy=graphical.target default.target
+Alias=streampulse-dashboard.service

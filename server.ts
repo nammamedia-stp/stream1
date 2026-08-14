@@ -4684,59 +4684,82 @@ async function startServer() {
 
   // Master StreamPulse Full Installer
   app.get('/api/rpi-player/script/full-install', async (req: any, res: any) => {
-    const host = (req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000').toString();
-    const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.protocol === 'https' || req.secure;
-    const defaultHost = `${isHttps ? 'https' : 'http'}://${host}`;
-    const targetUrl = (req.query.dashboardUrl || req.query.url || 'http://187.127.210.81/' || defaultHost).toString();
-    const streamKey = (req.query.streamKey || req.query.key || rpiPlayerSystem.getConfig().defaultStreamKey || 'live_stream').toString();
-    const targetUser = (req.query.user || 'himakara').toString();
-    const serverHost = (req.query.serverUrl || defaultHost || 'http://187.127.210.81').toString();
+    try {
+      const host = (req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000').toString();
+      const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.protocol === 'https' || req.secure;
+      const defaultHost = `${isHttps ? 'https' : 'http'}://${host}`;
+      const targetUrl = (req.query.dashboardUrl || req.query.url || 'http://187.127.210.81/' || defaultHost).toString();
+      const streamKey = (req.query.streamKey || req.query.key || rpiPlayerSystem.getConfig()?.defaultStreamKey || 'live_stream').toString();
+      const targetUser = (req.query.user || 'himakara').toString();
+      const serverHost = (req.query.serverUrl || defaultHost || 'http://187.127.210.81').toString();
 
-    const script = rpiPlayerSystem.generateFullInstallerScript(targetUrl, streamKey, targetUser, serverHost);
-    res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
-    res.setHeader('Content-Disposition', 'inline; filename="full-install.sh"');
-    res.send(script);
+      const script = rpiPlayerSystem.generateFullInstallerScript(targetUrl, streamKey, targetUser, serverHost);
+      res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
+      res.setHeader('Content-Disposition', 'inline; filename="full-install.sh"');
+      res.status(200).send(script);
+    } catch (err: any) {
+      console.error('[full-install] Failed to generate full installer:', err);
+      res.status(500).send(`#!/usr/bin/env bash\necho "[ERROR] StreamPulse Full Installer generation failed: ${err.message}" >&2\nexit 1\n`);
+    }
   });
 
   // Universal StreamPulse Master Installer (Auto User Detection + Per-Pi Channel)
   app.get('/api/rpi-player/script/universal-install', async (req: any, res: any) => {
-    const host = (req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000').toString();
-    const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.protocol === 'https' || req.secure;
-    const defaultHost = `${isHttps ? 'https' : 'http'}://${host}`;
-    const targetUrl = (req.query.dashboardUrl || req.query.url || 'http://187.127.210.81/' || defaultHost).toString();
-    const streamKey = (req.query.streamKey || req.query.key || rpiPlayerSystem.getConfig().defaultStreamKey || 'live_stream').toString();
-    const channelName = (req.query.channel || req.query.channelName || 'channel1').toString();
-    const targetUser = (req.query.user || '').toString();
-    const serverHost = (req.query.serverUrl || defaultHost || 'http://187.127.210.81').toString();
+    try {
+      const host = (req.headers['x-forwarded-host'] || req.headers.host || '187.127.210.81').toString();
+      const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.protocol === 'https' || req.secure;
+      const defaultHost = `${isHttps ? 'https' : 'http'}://${host}`;
+      
+      const targetUrl = (req.query.dashboardUrl || req.query.url || 'http://187.127.210.81/' || defaultHost).toString();
+      const streamKey = (req.query.streamKey || req.query.key || rpiPlayerSystem.getConfig()?.defaultStreamKey || 'live_stream').toString();
+      const channelName = (req.query.channel || req.query.channelName || 'channel1').toString();
+      const targetUser = (req.query.user || '').toString();
+      const serverHost = (req.query.serverUrl || defaultHost || 'http://187.127.210.81').toString();
 
-    const script = rpiPlayerSystem.generateUniversalInstallerScript(targetUrl, streamKey, channelName, targetUser, serverHost);
-    res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
-    res.setHeader('Content-Disposition', 'inline; filename="full-install.sh"');
-    res.send(script);
+      const script = rpiPlayerSystem.generateUniversalInstallerScript(targetUrl, streamKey, channelName, targetUser, serverHost);
+      res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
+      res.setHeader('Content-Disposition', 'inline; filename="full-install.sh"');
+      res.status(200).send(script);
+    } catch (err: any) {
+      console.error('[universal-install] Failed to generate universal installer:', err);
+      res.status(500).send(`#!/usr/bin/env bash\necho "[ERROR] StreamPulse Universal Installer generation failed: ${err.message}" >&2\nexit 1\n`);
+    }
   });
 
   // Universal Channel Switcher Script
   app.get('/api/rpi-player/script/set-channel', async (req: any, res: any) => {
-    const script = rpiPlayerSystem.getUniversalSetChannelScript();
-    res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
-    res.setHeader('Content-Disposition', 'inline; filename="set-channel.sh"');
-    res.send(script);
+    try {
+      const script = rpiPlayerSystem.getUniversalSetChannelScript();
+      res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
+      res.setHeader('Content-Disposition', 'inline; filename="set-channel.sh"');
+      res.status(200).send(script);
+    } catch (err: any) {
+      res.status(500).send(`#!/usr/bin/env bash\necho "[ERROR] set-channel.sh generation failed: ${err.message}" >&2\nexit 1\n`);
+    }
   });
 
   // Universal Validate Script
   app.get('/api/rpi-player/script/universal-validate', async (req: any, res: any) => {
-    const script = rpiPlayerSystem.getUniversalValidateScript();
-    res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
-    res.setHeader('Content-Disposition', 'inline; filename="validate.sh"');
-    res.send(script);
+    try {
+      const script = rpiPlayerSystem.getUniversalValidateScript();
+      res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
+      res.setHeader('Content-Disposition', 'inline; filename="validate.sh"');
+      res.status(200).send(script);
+    } catch (err: any) {
+      res.status(500).send(`#!/usr/bin/env bash\necho "[ERROR] validate.sh generation failed: ${err.message}" >&2\nexit 1\n`);
+    }
   });
 
   // Universal Diagnose Script
   app.get('/api/rpi-player/script/universal-diagnose', async (req: any, res: any) => {
-    const script = rpiPlayerSystem.getUniversalDiagnoseScript();
-    res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
-    res.setHeader('Content-Disposition', 'inline; filename="diagnose.sh"');
-    res.send(script);
+    try {
+      const script = rpiPlayerSystem.getUniversalDiagnoseScript();
+      res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
+      res.setHeader('Content-Disposition', 'inline; filename="diagnose.sh"');
+      res.status(200).send(script);
+    } catch (err: any) {
+      res.status(500).send(`#!/usr/bin/env bash\necho "[ERROR] diagnose.sh generation failed: ${err.message}" >&2\nexit 1\n`);
+    }
   });
 
   // Serve Motion Logo Video for RPi Offline Fallback

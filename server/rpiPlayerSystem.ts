@@ -1,19 +1,16 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { Request, Response } from 'express';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const CONFIG_PATH = path.resolve(process.cwd(), 'data/rpi_player_config.json');
 
 function safeReadTemplate(relPath: string): string {
+  const cwd = process.cwd();
+  const baseDir = typeof __dirname !== 'undefined' ? __dirname : cwd;
   const candidatePaths = [
-    path.resolve(process.cwd(), relPath),
-    path.resolve(relPath),
-    path.resolve(__dirname, '..', relPath),
-    path.resolve(__dirname, relPath),
+    path.resolve(cwd, relPath),
+    path.resolve(baseDir, '..', relPath),
+    path.resolve(baseDir, relPath),
     path.join('/app', relPath),
     path.resolve('.', relPath)
   ];

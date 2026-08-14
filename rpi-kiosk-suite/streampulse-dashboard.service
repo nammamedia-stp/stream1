@@ -1,0 +1,20 @@
+[Unit]
+Description=StreamPulse Dashboard Kiosk Service
+Documentation=https://streampulse.io
+After=network-online.target graphical-session.target sound.target pipewire.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=himakara
+Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStart=/opt/streampulse/bin/dashboard-kiosk.sh
+Restart=always
+RestartSec=3
+KillMode=mixed
+TimeoutStopSec=10
+
+[Install]
+WantedBy=graphical-session.target default.target

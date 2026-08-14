@@ -4625,6 +4625,120 @@ async function startServer() {
     res.send(script);
   });
 
+  // Debian 13 Labwc Kiosk Suite Endpoints
+  app.get('/api/rpi-player/script/kiosk-install', async (req: any, res: any) => {
+    const host = (req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000').toString();
+    const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.protocol === 'https' || req.secure;
+    const defaultHost = `${isHttps ? 'https' : 'http'}://${host}`;
+    const targetUrl = (req.query.url || 'http://187.127.210.81/' || defaultHost).toString();
+    const targetUser = (req.query.user || 'himakara').toString();
+    const script = rpiPlayerSystem.generateDebian13KioskInstallScript(targetUrl, targetUser);
+    res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
+    res.setHeader('Content-Disposition', 'inline; filename="install.sh"');
+    res.send(script);
+  });
+
+  app.get('/api/rpi-player/script/kiosk-launcher', async (req: any, res: any) => {
+    const targetUrl = (req.query.url || 'http://187.127.210.81/').toString();
+    const targetUser = (req.query.user || 'himakara').toString();
+    const script = rpiPlayerSystem.generateDebian13KioskLauncher(targetUrl, targetUser);
+    res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
+    res.setHeader('Content-Disposition', 'inline; filename="dashboard-kiosk.sh"');
+    res.send(script);
+  });
+
+  app.get('/api/rpi-player/script/kiosk-diagnose', async (req: any, res: any) => {
+    const script = rpiPlayerSystem.generateDebian13KioskDiagnoseScript();
+    res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
+    res.setHeader('Content-Disposition', 'inline; filename="diagnose.sh"');
+    res.send(script);
+  });
+
+  app.get('/api/rpi-player/script/kiosk-validate', async (req: any, res: any) => {
+    const script = rpiPlayerSystem.generateDebian13KioskValidateScript();
+    res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
+    res.setHeader('Content-Disposition', 'inline; filename="validate.sh"');
+    res.send(script);
+  });
+
+  app.get('/api/rpi-player/script/kiosk-restore', async (req: any, res: any) => {
+    const script = rpiPlayerSystem.generateDebian13KioskRestoreScript();
+    res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
+    res.setHeader('Content-Disposition', 'inline; filename="restore.sh"');
+    res.send(script);
+  });
+
+  app.get('/api/rpi-player/script/kiosk-uninstall', async (req: any, res: any) => {
+    const script = rpiPlayerSystem.generateDebian13KioskUninstallScript();
+    res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
+    res.setHeader('Content-Disposition', 'inline; filename="uninstall.sh"');
+    res.send(script);
+  });
+
+  app.get('/api/rpi-player/script/kiosk-backup', async (req: any, res: any) => {
+    const script = rpiPlayerSystem.generateDebian13KioskBackupScript();
+    res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
+    res.setHeader('Content-Disposition', 'inline; filename="backup.sh"');
+    res.send(script);
+  });
+
+  // Master StreamPulse Full Installer
+  app.get('/api/rpi-player/script/full-install', async (req: any, res: any) => {
+    const host = (req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000').toString();
+    const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.protocol === 'https' || req.secure;
+    const defaultHost = `${isHttps ? 'https' : 'http'}://${host}`;
+    const targetUrl = (req.query.dashboardUrl || req.query.url || 'http://187.127.210.81/' || defaultHost).toString();
+    const streamKey = (req.query.streamKey || req.query.key || rpiPlayerSystem.getConfig().defaultStreamKey || 'live_stream').toString();
+    const targetUser = (req.query.user || 'himakara').toString();
+    const serverHost = (req.query.serverUrl || defaultHost || 'http://187.127.210.81').toString();
+
+    const script = rpiPlayerSystem.generateFullInstallerScript(targetUrl, streamKey, targetUser, serverHost);
+    res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
+    res.setHeader('Content-Disposition', 'inline; filename="full-install.sh"');
+    res.send(script);
+  });
+
+  // Universal StreamPulse Master Installer (Auto User Detection + Per-Pi Channel)
+  app.get('/api/rpi-player/script/universal-install', async (req: any, res: any) => {
+    const host = (req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000').toString();
+    const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.protocol === 'https' || req.secure;
+    const defaultHost = `${isHttps ? 'https' : 'http'}://${host}`;
+    const targetUrl = (req.query.dashboardUrl || req.query.url || 'http://187.127.210.81/' || defaultHost).toString();
+    const streamKey = (req.query.streamKey || req.query.key || rpiPlayerSystem.getConfig().defaultStreamKey || 'live_stream').toString();
+    const channelName = (req.query.channel || req.query.channelName || 'channel1').toString();
+    const targetUser = (req.query.user || '').toString();
+    const serverHost = (req.query.serverUrl || defaultHost || 'http://187.127.210.81').toString();
+
+    const script = rpiPlayerSystem.generateUniversalInstallerScript(targetUrl, streamKey, channelName, targetUser, serverHost);
+    res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
+    res.setHeader('Content-Disposition', 'inline; filename="full-install.sh"');
+    res.send(script);
+  });
+
+  // Universal Channel Switcher Script
+  app.get('/api/rpi-player/script/set-channel', async (req: any, res: any) => {
+    const script = rpiPlayerSystem.getUniversalSetChannelScript();
+    res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
+    res.setHeader('Content-Disposition', 'inline; filename="set-channel.sh"');
+    res.send(script);
+  });
+
+  // Universal Validate Script
+  app.get('/api/rpi-player/script/universal-validate', async (req: any, res: any) => {
+    const script = rpiPlayerSystem.getUniversalValidateScript();
+    res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
+    res.setHeader('Content-Disposition', 'inline; filename="validate.sh"');
+    res.send(script);
+  });
+
+  // Universal Diagnose Script
+  app.get('/api/rpi-player/script/universal-diagnose', async (req: any, res: any) => {
+    const script = rpiPlayerSystem.getUniversalDiagnoseScript();
+    res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
+    res.setHeader('Content-Disposition', 'inline; filename="diagnose.sh"');
+    res.send(script);
+  });
+
   // Serve Motion Logo Video for RPi Offline Fallback
   app.get('/api/rpi-player/motion-logo', async (req: any, res: any) => {
     try {

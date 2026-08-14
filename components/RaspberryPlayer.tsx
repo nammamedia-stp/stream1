@@ -28,6 +28,7 @@ import {
   HardDrive,
   Monitor,
   Settings,
+  Radio,
   ChevronRight
 } from 'lucide-react';
 import { StreamSession, Device } from '../types';
@@ -65,10 +66,17 @@ interface RpiConfig {
 }
 
 export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams, networkDetails }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'devices' | 'config' | 'deployment'>('devices');
+  const [activeSubTab, setActiveSubTab] = useState<'devices' | 'debian13-kiosk' | 'config' | 'deployment'>('debian13-kiosk');
   const [devices, setDevices] = useState<Device[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionMessage, setActionMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Universal Suite state
+  const [piChannel, setPiChannel] = useState<string>('channel1');
+  const [kioskDashboardUrl, setKioskDashboardUrl] = useState<string>('http://187.127.210.81/');
+  const [kioskTargetUser, setKioskTargetUser] = useState<string>('auto (detects himakara, pi, etc.)');
+  const [debianScriptTab, setDebianScriptTab] = useState<'universal-install' | 'set-channel' | 'launcher' | 'service' | 'player-conf' | 'kiosk-conf' | 'validate' | 'diagnose' | 'backup' | 'restore' | 'uninstall'>('universal-install');
+  const [debianScriptContents, setDebianScriptContents] = useState<Record<string, string>>({});
 
   // Configuration state
   const [rpiConfig, setRpiConfig] = useState<RpiConfig>({
@@ -142,11 +150,19 @@ export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams
 
       // Fetch scripts
       const activeKey = selectedStreamKey || (streams[0]?.streamKey) || 'live_stream';
-      const [setupRes, sysRes, kioskRes, updateRes] = await Promise.all([
+      const [setupRes, sysRes, kioskRes, updateRes, univInstallRes, setChanRes, debLaunchRes, debDiagRes, debValRes, debRestRes, debUninstRes, debBackRes] = await Promise.all([
         fetch(`/api/rpi-player/script/setup?streamKey=${activeKey}`),
         fetch(`/api/rpi-player/script/systemd`),
         fetch(`/api/rpi-player/script/autostart?streamKey=${activeKey}`),
-        fetch(`/api/rpi-player/script/autoupdate`)
+        fetch(`/api/rpi-player/script/autoupdate`),
+        fetch(`/api/rpi-player/script/universal-install?channel=${encodeURIComponent(piChannel)}&streamKey=${encodeURIComponent(activeKey)}&dashboardUrl=${encodeURIComponent(kioskDashboardUrl)}`),
+        fetch(`/api/rpi-player/script/set-channel`),
+        fetch(`/api/rpi-player/script/kiosk-launcher?url=${encodeURIComponent(kioskDashboardUrl)}&user=${encodeURIComponent(kioskTargetUser)}`),
+        fetch(`/api/rpi-player/script/universal-diagnose`),
+        fetch(`/api/rpi-player/script/universal-validate`),
+        fetch(`/api/rpi-player/script/kiosk-restore`),
+        fetch(`/api/rpi-player/script/kiosk-uninstall`),
+        fetch(`/api/rpi-player/script/kiosk-backup`)
       ]);
 
       const setupText = setupRes.ok ? await setupRes.text() : '';
@@ -159,6 +175,20 @@ export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams
         systemd: sysText,
         kiosk: kioskText,
         autoupdate: updateText
+      });
+
+      setDebianScriptContents({
+        'universal-install': univInstallRes.ok ? await univInstallRes.text() : '',
+        'set-channel': setChanRes.ok ? await setChanRes.text() : '',
+        launcher: debLaunchRes.ok ? await debLaunchRes.text() : '',
+        service: `[Unit]\nDescription=StreamPulse Dashboard Kiosk Service (Universal)\nDocumentation=https://streampulse.io\nAfter=network-online.target sound.target graphical-session.target graphical.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=${kioskTargetUser.includes('auto') ? 'DETECTED_USER' : kioskTargetUser}\nEnvironment=DISPLAY=:0\nEnvironment=WAYLAND_DISPLAY=wayland-0\nEnvironment=XDG_RUNTIME_DIR=/run/user/1000\nExecStart=/opt/streampulse/bin/dashboard-kiosk.sh\nRestart=always\nRestartSec=3\nKillMode=mixed\nTimeoutStopSec=10\n\n[Install]\nWantedBy=graphical.target default.target`,
+        'player-conf': `# StreamPulse Player & Channel Configuration\n# Path: /opt/streampulse/config/player.conf\n\nCHANNEL_NAME="${piChannel}"\nSTREAM_KEY="${activeKey}"\nSERVER_URL="http://187.127.210.81"\nLOGO_DIR="/opt/streampulse/logo"\nOFFLINE_LOGO_MEDIA="/opt/streampulse/logo/motion-logo.mp4"\nOFFLINE_FALLBACK_HTML="/opt/streampulse/logo/logo-fallback.html"\nPLAYBACK_MODE="auto"\nENABLE_HW_ACCEL=1\nAUDIO_OUTPUT="default"\nLAST_UPDATED="${new Date().toISOString()}"`,
+        'kiosk-conf': `# StreamPulse Master Kiosk Configuration\n# Path: /opt/streampulse/config/kiosk.conf\n\nDASHBOARD_URL="${kioskDashboardUrl}"\nKIOSK_USER="${kioskTargetUser.includes('auto') ? 'DETECTED_USER' : kioskTargetUser}"\nBROWSER_PROFILE_DIR="/opt/streampulse/chromium-profile"\nBROWSER_ENGINE="auto"\nSCREEN_WIDTH=1920\nSCREEN_HEIGHT=1080\nHIDE_CURSOR=1\nDISABLE_SCREEN_BLANKING=1\nWAIT_NETWORK_TIMEOUT=30\nRESTART_DELAY_SEC=3\nCHROMIUM_EXTRA_FLAGS=(\n  "--password-store=basic"\n  "--noerrdialogs"\n  "--disable-infobars"\n  "--kiosk"\n  "--start-fullscreen"\n  "--fullscreen"\n  "--no-first-run"\n  "--disable-restore-session-state"\n  "--disable-session-crashed-bubble"\n  "--autoplay-policy=no-user-gesture-required"\n  "--check-for-update-interval=31536000"\n  "--disable-component-update"\n  "--disable-features=TranslateUI"\n  "--disable-save-password-bubble"\n  "--allow-file-access-from-files"\n  "--disable-web-security"\n  "--disable-gpu"\n  "--window-position=0,0"\n  "--window-size=1920,1080"\n)`,
+        diagnose: debDiagRes.ok ? await debDiagRes.text() : '',
+        validate: debValRes.ok ? await debValRes.text() : '',
+        restore: debRestRes.ok ? await debRestRes.text() : '',
+        backup: debBackRes.ok ? await debBackRes.text() : '',
+        uninstall: debUninstRes.ok ? await debUninstRes.text() : ''
       });
 
     } catch (err: any) {
@@ -383,6 +413,19 @@ export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams
       {/* Primary Tab Selector */}
       <div className="border-b border-slate-800 flex items-center gap-2">
         <button
+          onClick={() => setActiveSubTab('debian13-kiosk')}
+          className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+            activeSubTab === 'debian13-kiosk'
+              ? 'border-indigo-500 text-indigo-400 bg-indigo-500/5'
+              : 'border-transparent text-slate-400 hover:text-slate-200 hover:border-slate-700'
+          }`}
+        >
+          <Tv className="w-4 h-4 text-emerald-400" />
+          <span>Debian 13 (Trixie) & Labwc Kiosk Suite</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono">NEW</span>
+        </button>
+
+        <button
           onClick={() => setActiveSubTab('devices')}
           className={`flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
             activeSubTab === 'devices'
@@ -415,9 +458,271 @@ export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams
           }`}
         >
           <Terminal className="w-4 h-4" />
-          Deployment & Auto-Installer
+          Legacy Setup Scripts
         </button>
       </div>
+
+      {/* TAB 0: DEBIAN 13 (TRIXIE) & LABWC KIOSK SUITE */}
+      {activeSubTab === 'debian13-kiosk' && (
+        <div className="space-y-6">
+          {/* Main Hero Card */}
+          <div className="bg-slate-900 border border-emerald-500/30 rounded-xl p-6 shadow-xl space-y-5">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-emerald-500/20 rounded-xl text-emerald-400">
+                  <Monitor className="w-7 h-7" />
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                    StreamPulse Universal Master Installer
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-mono">New & Existing Pis</span>
+                  </h2>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    1-Command master installer for Logo Player, Per-Pi Assigned Channel, Dashboard Kiosk, automatic user detection, and 18-point validation.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <a
+                  href={`/api/rpi-player/script/universal-install?channel=${encodeURIComponent(piChannel)}&streamKey=${encodeURIComponent(selectedStreamKey || 'live_stream')}&dashboardUrl=${encodeURIComponent(kioskDashboardUrl)}`}
+                  download="full-install.sh"
+                  className="inline-flex items-center gap-2 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg shadow-lg shadow-emerald-900/30 transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  Download full-install.sh
+                </a>
+              </div>
+            </div>
+
+            {/* Target Spec Badges */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-950/80 border border-slate-800 rounded-lg p-3 text-xs">
+              <div>
+                <span className="text-slate-500 block text-[11px]">Hardware & OS</span>
+                <span className="text-slate-200 font-medium font-mono">Raspberry Pi ARM64 / Debian 13</span>
+              </div>
+              <div>
+                <span className="text-slate-500 block text-[11px]">Compositor</span>
+                <span className="text-slate-200 font-medium font-mono">Labwc (Wayland)</span>
+              </div>
+              <div>
+                <span className="text-slate-500 block text-[11px]">User Detection</span>
+                <span className="text-emerald-400 font-medium font-mono">Auto (himakara, pi, operator...)</span>
+              </div>
+              <div>
+                <span className="text-slate-500 block text-[11px]">Keyring Suppression</span>
+                <span className="text-emerald-400 font-medium font-mono">--password-store=basic</span>
+              </div>
+            </div>
+
+            {/* Target Config Controls */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-950 border border-slate-800 rounded-lg p-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Assigned Pi Channel <span className="text-emerald-400 font-mono text-[10px]">(Per-Pi)</span>
+                </label>
+                <input
+                  type="text"
+                  value={piChannel}
+                  onChange={(e) => setPiChannel(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-indigo-400 font-mono focus:outline-none focus:border-indigo-500"
+                  placeholder="e.g. channel1, auditorium, lobby"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">Stream Key</label>
+                <select
+                  value={selectedStreamKey}
+                  onChange={(e) => setSelectedStreamKey(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-indigo-400 font-mono focus:outline-none focus:border-indigo-500"
+                >
+                  {streams.map((s) => (
+                    <option key={s.id} value={s.streamKey}>
+                      {s.title} ({s.streamKey})
+                    </option>
+                  ))}
+                  {streams.length === 0 && <option value="live_stream">Default (live_stream)</option>}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">Target Dashboard URL</label>
+                <input
+                  type="text"
+                  value={kioskDashboardUrl}
+                  onChange={(e) => setKioskDashboardUrl(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-emerald-400 font-mono focus:outline-none focus:border-emerald-500"
+                  placeholder="http://187.127.210.81/"
+                />
+              </div>
+            </div>
+
+            {/* 1-Command Installation Snippets */}
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  1-Command Master Installer (Copy & Run on Raspberry Pi Terminal):
+                </label>
+                <div className="bg-slate-950 border border-emerald-500/30 rounded-lg p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 font-mono text-xs text-emerald-400">
+                  <code className="select-all break-all">
+                    curl -fsSL "{window.location.origin}/api/rpi-player/script/universal-install?channel={encodeURIComponent(piChannel)}&streamKey={encodeURIComponent(selectedStreamKey || 'live_stream')}&dashboardUrl={encodeURIComponent(kioskDashboardUrl)}" | sudo bash
+                  </code>
+                  <CopyButton
+                    text={`curl -fsSL "${window.location.origin}/api/rpi-player/script/universal-install?channel=${encodeURIComponent(piChannel)}&streamKey=${encodeURIComponent(selectedStreamKey || 'live_stream')}&dashboardUrl=${encodeURIComponent(kioskDashboardUrl)}" | sudo bash`}
+                    label="Copy Master Command"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1">
+                  Alternative Command with Explicit CLI Arguments:
+                </label>
+                <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 font-mono text-xs text-slate-300">
+                  <code className="select-all break-all">
+                    curl -fsSL "{window.location.origin}/api/rpi-player/script/universal-install" | sudo bash -s -- --channel "{piChannel}" --stream-key "{selectedStreamKey || 'live_stream'}" --dashboard-url "{kioskDashboardUrl}"
+                  </code>
+                  <CopyButton
+                    text={`curl -fsSL "${window.location.origin}/api/rpi-player/script/universal-install" | sudo bash -s -- --channel "${piChannel}" --stream-key "${selectedStreamKey || 'live_stream'}" --dashboard-url "${kioskDashboardUrl}"`}
+                    label="Copy CLI Command"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* 18-Point Production Verification Checklist */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                <Shield className="w-4 h-4 text-emerald-400" />
+                18-Point Universal Verification Matrix
+              </h3>
+              <span className="text-xs text-slate-400 font-mono">Automated via sudo /opt/streampulse/bin/validate.sh</span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+              {[
+                { title: '1. Raspberry Pi / ARM64', detail: 'Compatible' },
+                { title: '2. Supported OS', detail: 'Debian 13 Trixie' },
+                { title: '3. Graphical User Detected', detail: 'Auto-resolved' },
+                { title: '4. Labwc / Wayland Compositor', detail: 'Protected' },
+                { title: '5. Network Gateway & IP', detail: 'Connected' },
+                { title: '6. Dashboard Reachability', detail: 'HTTP 200/OK' },
+                { title: '7. Browser Installed', detail: 'Chromium / Firefox' },
+                { title: '8. Dedicated Kiosk Profile', detail: '/opt/streampulse/chromium-profile' },
+                { title: '9. Keyring Popup Prevention', detail: '--password-store=basic' },
+                { title: '10. Authoritative Launcher', detail: '/opt/streampulse/bin/dashboard-kiosk.sh' },
+                { title: '11. Dashboard Service', detail: 'streampulse-dashboard.service' },
+                { title: '12. Player Configuration', detail: '/opt/streampulse/config/player.conf' },
+                { title: '13. Player Service Integrity', detail: 'Preserved / Active' },
+                { title: '14. Assigned Per-Pi Channel', detail: piChannel },
+                { title: '15. Common Logo Folder', detail: '/opt/streampulse/logo/' },
+                { title: '16. Common Logo Media Assets', detail: 'Never Deleted' },
+                { title: '17. Streaming Key Configuration', detail: 'Masked in diagnostics' },
+                { title: '18. Reboot Persistence & Watchdog', detail: 'systemd auto-restart' }
+              ].map((item, idx) => (
+                <div key={idx} className="p-3 bg-slate-950 border border-slate-800 rounded-lg flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-mono font-bold text-[10px]">[OK]</span>
+                    <span className="text-slate-200 font-medium">{item.title}</span>
+                  </div>
+                  <span className="text-[11px] text-slate-400 font-mono truncate max-w-[100px]">{item.detail}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Quick Action Toolbox */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2">
+              <div className="flex items-center gap-2 text-emerald-400 text-xs font-semibold">
+                <Radio className="w-4 h-4" /> Change Pi Channel
+              </div>
+              <p className="text-[11px] text-slate-400">Safely switches assigned channel without rebuilding app.</p>
+              <div className="bg-slate-950 p-2 rounded border border-slate-800 flex items-center justify-between font-mono text-[11px] text-slate-300">
+                <code className="truncate mr-1">sudo /opt/streampulse/bin/set-channel.sh {piChannel}</code>
+                <CopyButton text={`sudo /opt/streampulse/bin/set-channel.sh ${piChannel}`} label="Copy" />
+              </div>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2">
+              <div className="flex items-center gap-2 text-indigo-400 text-xs font-semibold">
+                <Activity className="w-4 h-4" /> Run Diagnostics
+              </div>
+              <p className="text-[11px] text-slate-400">Inspects hardware, user, channel, logo, & masks stream key.</p>
+              <div className="bg-slate-950 p-2 rounded border border-slate-800 flex items-center justify-between font-mono text-[11px] text-slate-300">
+                <code>sudo /opt/streampulse/bin/diagnose.sh</code>
+                <CopyButton text="sudo /opt/streampulse/bin/diagnose.sh" label="Copy" />
+              </div>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2">
+              <div className="flex items-center gap-2 text-emerald-400 text-xs font-semibold">
+                <Check className="w-4 h-4" /> Run 18-Point Tests
+              </div>
+              <p className="text-[11px] text-slate-400">Verifies system health with instant [OK] / [FAIL] matrix.</p>
+              <div className="bg-slate-950 p-2 rounded border border-slate-800 flex items-center justify-between font-mono text-[11px] text-slate-300">
+                <code>sudo /opt/streampulse/bin/validate.sh</code>
+                <CopyButton text="sudo /opt/streampulse/bin/validate.sh" label="Copy" />
+              </div>
+            </div>
+
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2">
+              <div className="flex items-center gap-2 text-amber-400 text-xs font-semibold">
+                <RotateCcw className="w-4 h-4" /> Restore Snapshot
+              </div>
+              <p className="text-[11px] text-slate-400">Rollback to pre-installation configuration at any time.</p>
+              <div className="bg-slate-950 p-2 rounded border border-slate-800 flex items-center justify-between font-mono text-[11px] text-slate-300">
+                <code>sudo /opt/streampulse/bin/restore.sh</code>
+                <CopyButton text="sudo /opt/streampulse/bin/restore.sh" label="Copy" />
+              </div>
+            </div>
+          </div>
+
+          {/* Script Inspector Subtabs */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
+            <div className="bg-slate-950 border-b border-slate-800 flex items-center justify-between px-4 overflow-x-auto">
+              <div className="flex items-center gap-1">
+                {[
+                  { id: 'universal-install', label: 'full-install.sh' },
+                  { id: 'set-channel', label: 'set-channel.sh' },
+                  { id: 'launcher', label: 'dashboard-kiosk.sh' },
+                  { id: 'service', label: 'streampulse-dashboard.service' },
+                  { id: 'player-conf', label: 'player.conf' },
+                  { id: 'kiosk-conf', label: 'kiosk.conf' },
+                  { id: 'validate', label: 'validate.sh' },
+                  { id: 'diagnose', label: 'diagnose.sh' },
+                  { id: 'backup', label: 'backup.sh' },
+                  { id: 'restore', label: 'restore.sh' },
+                  { id: 'uninstall', label: 'uninstall.sh' }
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setDebianScriptTab(tab.id as any)}
+                    className={`px-3 py-3 text-xs font-medium border-b-2 whitespace-nowrap transition-colors ${
+                      debianScriptTab === tab.id
+                        ? 'border-emerald-500 text-emerald-400 bg-slate-900/60'
+                        : 'border-transparent text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2 py-2">
+                <CopyButton text={debianScriptContents[debianScriptTab] || ''} label="Copy Code" />
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-950 overflow-x-auto max-h-[480px]">
+              <pre className="text-xs font-mono text-slate-300 leading-relaxed select-all whitespace-pre">
+                {debianScriptContents[debianScriptTab] || '# Script loading or not generated yet...'}
+              </pre>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* TAB 1: DEVICES & LIVE STATUS */}
       {activeSubTab === 'devices' && (

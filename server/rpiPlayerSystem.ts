@@ -567,6 +567,100 @@ systemctl restart streampulse-rpi-player.service
 echo "[StreamPulse RPi Player] Player updated successfully!"`;
   }
 
+  public generateDebian13KioskInstallScript(dashboardUrl: string = 'http://187.127.210.81/', targetUser: string = 'himakara'): string {
+    const cleanUrl = dashboardUrl.startsWith('http') ? dashboardUrl : `http://${dashboardUrl}`;
+    const kioskScript = fs.readFileSync(path.resolve('./rpi-kiosk-suite/install.sh'), 'utf-8');
+    return kioskScript.replace(/DASHBOARD_URL="http:\/\/187\.127\.210\.81\/"/g, `DASHBOARD_URL="${cleanUrl}"`)
+                      .replace(/DEFAULT_USER="himakara"/g, `DEFAULT_USER="${targetUser}"`);
+  }
+
+  public generateDebian13KioskLauncher(dashboardUrl: string = 'http://187.127.210.81/', targetUser: string = 'himakara'): string {
+    const cleanUrl = dashboardUrl.startsWith('http') ? dashboardUrl : `http://${dashboardUrl}`;
+    const launcherScript = fs.readFileSync(path.resolve('./rpi-kiosk-suite/dashboard-kiosk.sh'), 'utf-8');
+    return launcherScript.replace(/DASHBOARD_URL="http:\/\/187\.127\.210\.81\/"/g, `DASHBOARD_URL="${cleanUrl}"`)
+                         .replace(/KIOSK_USER="himakara"/g, `KIOSK_USER="${targetUser}"`);
+  }
+
+  public generateDebian13KioskDiagnoseScript(): string {
+    return fs.readFileSync(path.resolve('./rpi-kiosk-suite/diagnose.sh'), 'utf-8');
+  }
+
+  public generateDebian13KioskValidateScript(): string {
+    return fs.readFileSync(path.resolve('./rpi-kiosk-suite/validate.sh'), 'utf-8');
+  }
+
+  public generateDebian13KioskRestoreScript(): string {
+    return fs.readFileSync(path.resolve('./rpi-kiosk-suite/restore.sh'), 'utf-8');
+  }
+
+  public generateDebian13KioskUninstallScript(): string {
+    return fs.readFileSync(path.resolve('./rpi-kiosk-suite/uninstall.sh'), 'utf-8');
+  }
+
+  public generateDebian13KioskBackupScript(): string {
+    return fs.readFileSync(path.resolve('./rpi-kiosk-suite/backup.sh'), 'utf-8');
+  }
+
+  public generateFullInstallerScript(dashboardUrl: string = 'http://187.127.210.81/', streamKey: string = 'live_stream', targetUser: string = 'himakara', serverHost: string = 'http://187.127.210.81'): string {
+    const cleanDashboardUrl = dashboardUrl.startsWith('http') ? dashboardUrl : `http://${dashboardUrl}`;
+    const cleanServerHost = serverHost.startsWith('http') ? serverHost : `http://${serverHost}`;
+    const installerTemplate = fs.readFileSync(path.resolve('./streampulse-full-installer/full-install.sh'), 'utf-8');
+    
+    return installerTemplate
+      .replace(/STREAM_KEY="live_stream"/g, `STREAM_KEY="${streamKey}"`)
+      .replace(/DASHBOARD_URL="http:\/\/187\.127\.210\.81\/"/g, `DASHBOARD_URL="${cleanDashboardUrl}"`)
+      .replace(/SERVER_URL="http:\/\/187\.127\.210\.81"/g, `SERVER_URL="${cleanServerHost}"`)
+      .replace(/TARGET_USER="himakara"/g, `TARGET_USER="${targetUser}"`);
+  }
+
+  public generateUniversalInstallerScript(
+    dashboardUrl: string = 'http://187.127.210.81/',
+    streamKey: string = 'live_stream',
+    channelName: string = 'channel1',
+    targetUser: string = '',
+    serverHost: string = 'http://187.127.210.81'
+  ): string {
+    const cleanDashboardUrl = dashboardUrl.startsWith('http') ? dashboardUrl : `http://${dashboardUrl}`;
+    const cleanServerHost = serverHost.startsWith('http') ? serverHost : `http://${serverHost}`;
+    const installerTemplate = fs.readFileSync(path.resolve('./streampulse-universal-installer/full-install.sh'), 'utf-8');
+    
+    let result = installerTemplate
+      .replace(/CHANNEL_NAME="channel1"/g, `CHANNEL_NAME="${channelName}"`)
+      .replace(/STREAM_KEY="live_stream"/g, `STREAM_KEY="${streamKey}"`)
+      .replace(/DASHBOARD_URL="http:\/\/187\.127\.210\.81\/"/g, `DASHBOARD_URL="${cleanDashboardUrl}"`)
+      .replace(/SERVER_URL="http:\/\/187\.127\.210\.81"/g, `SERVER_URL="${cleanServerHost}"`);
+
+    if (targetUser) {
+      result = result.replace(/OVERRIDE_USER=""/g, `OVERRIDE_USER="${targetUser}"`);
+    }
+
+    return result;
+  }
+
+  public getUniversalSetChannelScript(): string {
+    return fs.readFileSync(path.resolve('./streampulse-universal-installer/bin/set-channel.sh'), 'utf-8');
+  }
+
+  public getUniversalValidateScript(): string {
+    return fs.readFileSync(path.resolve('./streampulse-universal-installer/bin/validate.sh'), 'utf-8');
+  }
+
+  public getUniversalDiagnoseScript(): string {
+    return fs.readFileSync(path.resolve('./streampulse-universal-installer/bin/diagnose.sh'), 'utf-8');
+  }
+
+  public getUniversalBackupScript(): string {
+    return fs.readFileSync(path.resolve('./streampulse-universal-installer/bin/backup.sh'), 'utf-8');
+  }
+
+  public getUniversalRestoreScript(): string {
+    return fs.readFileSync(path.resolve('./streampulse-universal-installer/bin/restore.sh'), 'utf-8');
+  }
+
+  public getUniversalUninstallScript(): string {
+    return fs.readFileSync(path.resolve('./streampulse-universal-installer/uninstall.sh'), 'utf-8');
+  }
+
   public renderKioskHtml(streamKey: string, serverHost: string): string {
     const isHttps = serverHost.startsWith('https');
     const proto = isHttps ? 'https' : 'http';

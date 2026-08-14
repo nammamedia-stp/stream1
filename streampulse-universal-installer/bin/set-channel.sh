@@ -102,8 +102,10 @@ mv "${TMP_CONF}" "${CONFIG_FILE}"
 chmod 644 "${CONFIG_FILE}"
 
 # Preserve player ownership if needed
-DETECTED_USER="${SUDO_USER:-$(awk -F: '$3 == 1000 {print $1}' /etc/passwd 2>/dev/null || echo "himakara")}"
-chown "${DETECTED_USER}:${DETECTED_USER}" "${CONFIG_FILE}" 2>/dev/null || true
+DETECTED_USER="${SUDO_USER:-$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $3}' | grep -v '^root$' | head -n1 || awk -F: '$3 == 1000 {print $1}' /etc/passwd 2>/dev/null || stat -c '%U' "${CONFIG_FILE}" 2>/dev/null || echo '')}"
+if [[ -n "${DETECTED_USER}" ]] && id -u "${DETECTED_USER}" >/dev/null 2>&1; then
+  chown "${DETECTED_USER}:${DETECTED_USER}" "${CONFIG_FILE}" 2>/dev/null || true
+fi
 
 echo "  [+] Updated configuration saved to ${CONFIG_FILE}"
 

@@ -1,0 +1,26 @@
+[Unit]
+Description=StreamPulse Dedicated Player Engine Service
+Documentation=https://streampulse.io
+After=network-online.target sound.target graphical-session.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=himakara
+Group=himakara
+WorkingDirectory=/opt/streampulse
+Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=HOME=/home/himakara
+ExecStartPre=/bin/sleep 2
+ExecStart=/opt/streampulse/bin/player-launcher.sh
+Restart=always
+RestartSec=3
+KillMode=mixed
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical.target default.target

@@ -703,6 +703,7 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
       align-items: center;
       justify-content: center;
       background: #000000;
+      overflow: hidden;
     }
     .kiosk-video {
       position: absolute;
@@ -714,12 +715,118 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
       background: #000000;
       border: none;
       outline: none;
+      transition: opacity 0.3s ease-in-out;
     }
     #live-video {
-      z-index: 10;
+      z-index: 20;
+      opacity: 0;
+      pointer-events: none;
+    }
+    #live-video.active {
+      opacity: 1;
+      pointer-events: auto;
     }
     #motion-video {
+      z-index: 10;
+      opacity: 1;
+    }
+    #motion-video.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    #html-fallback {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
       z-index: 5;
+      background-color: #090d16;
+      color: #f8fafc;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 32px;
+    }
+    #html-fallback.active {
+      display: flex;
+    }
+    .pulse-ring {
+      width: 150px;
+      height: 150px;
+      border-radius: 50%;
+      border: 3px solid #6366f1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: pulse-ring 2.8s infinite ease-in-out;
+      margin-bottom: 28px;
+      box-shadow: 0 0 30px rgba(99, 102, 241, 0.25);
+    }
+    .pulse-core {
+      width: 108px;
+      height: 108px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #4f46e5, #06b6d4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 20px rgba(6, 182, 212, 0.4);
+    }
+    .brand-title {
+      font-size: 34px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, #ffffff 40%, #94a3b8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 6px;
+    }
+    .channel-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(30, 41, 59, 0.8);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      padding: 6px 16px;
+      border-radius: 9999px;
+      color: #818cf8;
+      font-size: 15px;
+      font-weight: 600;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      margin-top: 8px;
+    }
+    .channel-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: #f59e0b;
+      animation: blink 1.2s infinite;
+    }
+    .status-message {
+      color: #64748b;
+      font-size: 14px;
+      margin-top: 20px;
+      letter-spacing: 0.02em;
+    }
+    @keyframes pulse-ring {
+      0%, 100% {
+        transform: scale(1);
+        border-color: #6366f1;
+        opacity: 0.8;
+      }
+      50% {
+        transform: scale(1.1);
+        border-color: #06b6d4;
+        opacity: 1;
+        box-shadow: 0 0 45px rgba(6, 182, 212, 0.4);
+      }
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
     }
     .status-overlay {
       position: absolute;
@@ -763,19 +870,37 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
 <body class="cursor-hidden">
   <div id="player-container">
     <!-- Live HLS Video Element -->
-    <video id="live-video" class="kiosk-video" autoplay playsinline muted></video>
+    <video id="live-video" class="kiosk-video" playsinline muted preload="auto"></video>
 
-    <!-- Offline Local Motion Logo Video Element -->
-    <video id="motion-video" class="kiosk-video" autoplay playsinline loop muted style="display: none;">
-      <source src="http://127.0.0.1:18765/motion_logo.mp4" type="video/mp4">
+    <!-- Offline Permanent Motion Logo Video Element -->
+    <video id="motion-video" class="kiosk-video" autoplay loop muted playsinline preload="auto">
+      <source src="motion-logo.mp4" type="video/mp4">
+      <source src="/opt/streampulse/logo/motion-logo.mp4" type="video/mp4">
       <source src="${proto}://${cleanHost}/api/rpi-player/motion-logo" type="video/mp4">
     </video>
+
+    <!-- Local HTML Fallback (when MP4 is unplayable) -->
+    <div id="html-fallback">
+      <div class="pulse-ring">
+        <div class="pulse-core">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+        </div>
+      </div>
+      <div class="brand-title">StreamPulse</div>
+      <div class="channel-badge">
+        <span class="channel-dot"></span>
+        <span id="fallback-channel-name">Channel Standby</span>
+      </div>
+      <div id="fallback-status" class="status-message">Waiting for live broadcast stream...</div>
+    </div>
 
     <!-- Overlay Status Badge -->
     <div id="status-overlay" class="status-overlay" style="opacity: 0.8;">
       <div id="status-badge" class="status-badge reconnecting"></div>
-      <span id="status-text">Initializing RPi Player...</span>
-      <span id="status-metrics" style="color: #94a3b8; border-left: 1px solid #334155; padding-left: 8px;"></span>
+      <span id="status-text">Standby • Motion Logo Active</span>
+      <span id="status-metrics" style="color: #94a3b8; border-left: 1px solid #334155; padding-left: 8px;">Polling stream...</span>
     </div>
   </div>
 
@@ -787,15 +912,24 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
 
       const liveVideo = document.getElementById('live-video');
       const motionVideo = document.getElementById('motion-video');
+      const htmlFallback = document.getElementById('html-fallback');
+      const fallbackChannelName = document.getElementById('fallback-channel-name');
+      const fallbackStatus = document.getElementById('fallback-status');
+      const statusOverlay = document.getElementById('status-overlay');
       const statusBadge = document.getElementById('status-badge');
       const statusText = document.getElementById('status-text');
       const statusMetrics = document.getElementById('status-metrics');
 
-      let currentState = 'INITIALIZING'; // 'LIVE_HLS' | 'OFFLINE_MOTION'
+      if (fallbackChannelName) {
+        fallbackChannelName.textContent = 'Channel: ' + STREAM_KEY;
+      }
+
+      let currentState = 'STANDBY'; // 'STANDBY' | 'LIVE'
       let hlsInstance = null;
       let pollTimer = null;
       let mouseTimer = null;
       let telemetryTimer = null;
+      let mp4Failed = false;
       let fps = 0;
       let frameCount = 0;
       let lastFpsTime = performance.now();
@@ -838,18 +972,58 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
         if (!videoEl) return Promise.resolve();
         videoEl.muted = true;
         videoEl.playsInline = true;
-        videoEl.autoplay = true;
-        return videoEl.play().catch(err => {
-          console.warn('[RPi Player] Playback start rejected:', err);
-          videoEl.muted = true;
-          return videoEl.play().catch(e => {
-            console.error('[RPi Player] Muted retry rejected:', e);
+        const playPromise = videoEl.play();
+        if (playPromise !== undefined) {
+          return playPromise.catch(err => {
+            console.warn('[StreamPulse Player] Playback start rejected:', err);
+            videoEl.muted = true;
+            return videoEl.play().catch(e => {
+              console.error('[StreamPulse Player] Muted retry rejected:', e);
+            });
           });
-        });
+        }
+        return Promise.resolve();
       }
 
+      function showOfflineVisuals() {
+        if (!mp4Failed) {
+          motionVideo.classList.remove('hidden');
+          htmlFallback.classList.remove('active');
+          motionVideo.currentTime = 0;
+          safePlay(motionVideo).catch(() => {
+            handleMp4Failure();
+          });
+        } else {
+          motionVideo.classList.add('hidden');
+          htmlFallback.classList.add('active');
+        }
+      }
+
+      function handleMp4Failure() {
+        mp4Failed = true;
+        console.warn('[StreamPulse Player] Motion Logo MP4 unplayable. Using HTML fallback.');
+        motionVideo.classList.add('hidden');
+        htmlFallback.classList.add('active');
+        if (fallbackStatus) {
+          fallbackStatus.textContent = 'Stream offline • Polling ' + SERVER_HOST + '...';
+        }
+      }
+
+      motionVideo.addEventListener('error', handleMp4Failure);
+      motionVideo.addEventListener('stalled', () => {
+        if (currentState === 'STANDBY' && motionVideo.paused && !mp4Failed) {
+          safePlay(motionVideo);
+        }
+      });
+      motionVideo.addEventListener('ended', () => {
+        if (currentState === 'STANDBY' && !mp4Failed) {
+          motionVideo.currentTime = 0;
+          safePlay(motionVideo);
+        }
+      });
+
       function sendTelemetry() {
-        const activeVideo = currentState === 'LIVE_HLS' ? liveVideo : motionVideo;
+        const activeVideo = currentState === 'LIVE' ? liveVideo : motionVideo;
         const width = activeVideo.videoWidth || 1920;
         const height = activeVideo.videoHeight || 1080;
 
@@ -858,58 +1032,52 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             streamKey: STREAM_KEY,
-            online_status: currentState === 'LIVE_HLS' ? 'playing' : 'offline_motion_fallback',
+            online_status: currentState === 'LIVE' ? 'playing' : 'offline_logo',
             current_resolution: width + 'x' + height,
-            fps: fps || (currentState === 'LIVE_HLS' ? 60 : 30),
-            engine: currentState === 'LIVE_HLS' ? 'HLS.js' : 'Local Motion Logo',
-            player_version: '1.3.0-rpi'
+            fps: fps || (currentState === 'LIVE' ? 60 : 30),
+            engine: currentState === 'LIVE' ? 'HLS.js' : 'Motion Logo',
+            player_version: '2.0.0-universal'
           })
         }).catch(() => {});
       }
       telemetryTimer = setInterval(sendTelemetry, 5000);
 
       // ----------------------------------------------------
-      // STATE MACHINE: OFFLINE_MOTION <---> LIVE_HLS
+      // STATE MACHINE: STANDBY (LOGO) <---> LIVE (HLS)
       // ----------------------------------------------------
 
-      function switchToOfflineMotion(reason) {
-        if (currentState === 'OFFLINE_MOTION') return;
-        currentState = 'OFFLINE_MOTION';
-        console.warn('[RPi Player State] Entering OFFLINE_MOTION. Reason:', reason || 'Stream Offline');
+      function switchToOfflineStandby(reason) {
+        if (currentState === 'STANDBY') return;
+        currentState = 'STANDBY';
+        console.warn('[StreamPulse Player] Entering STANDBY state. Reason:', reason || 'Stream Offline');
 
-        // Destroy HLS instance
+        // Destroy active HLS instance
         if (hlsInstance) {
           try { hlsInstance.destroy(); } catch(e) {}
           hlsInstance = null;
         }
 
-        // Pause & hide live stream video
-        liveVideo.pause();
-        liveVideo.style.display = 'none';
+        // Hide & pause live video
+        liveVideo.classList.remove('active');
+        try {
+          liveVideo.pause();
+          liveVideo.removeAttribute('src');
+          liveVideo.load();
+        } catch (e) {}
 
-        // Show & play local Motion Logo video
-        motionVideo.style.display = 'block';
-        motionVideo.currentTime = 0;
-        safePlay(motionVideo);
+        // Show offline visuals
+        showOfflineVisuals();
 
         updateStatus('reconnecting', 'Offline • Motion Logo Active', 'Polling Live Stream...');
-
         startHlsPolling();
       }
 
       function switchToLiveHls() {
-        if (currentState === 'LIVE_HLS') return;
-        currentState = 'LIVE_HLS';
-        console.log('[RPi Player State] Entering LIVE_HLS.');
+        if (currentState === 'LIVE') return;
+        currentState = 'LIVE';
+        console.log('[StreamPulse Player] Entering LIVE state.');
 
         stopHlsPolling();
-
-        // Pause & hide Motion Logo video
-        motionVideo.pause();
-        motionVideo.style.display = 'none';
-
-        // Show & play live video element
-        liveVideo.style.display = 'block';
 
         if (hlsInstance) {
           try { hlsInstance.destroy(); } catch(e) {}
@@ -924,58 +1092,83 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
             lowLatencyMode: true,
             backBufferLength: 30,
             maxBufferLength: 10,
-            liveBackBufferLength: 10,
-            manifestLoadingTimeOut: 5000,
-            manifestLoadingMaxRetry: 2
+            liveBackBufferLength: 6,
+            manifestLoadingTimeOut: 6000,
+            manifestLoadingMaxRetry: 2,
+            fragLoadingTimeOut: 8000
           });
 
           hlsInstance.attachMedia(liveVideo);
           hlsInstance.loadSource(cacheBustUrl);
 
           hlsInstance.on(Hls.Events.MANIFEST_PARSED, function() {
-            console.log('[RPi Player] Live manifest parsed. Playing HLS live stream...');
+            console.log('[StreamPulse Player] Live manifest parsed. Playing HLS stream...');
             safePlay(liveVideo);
-            updateStatus('live', 'Live • ' + (liveVideo.videoHeight || 1080) + 'p', 'HLS Active');
           });
 
           hlsInstance.on(Hls.Events.ERROR, function(event, data) {
+            // NEVER TREAT 404 AS A FATAL UNRECOVERABLE APP CRASH!
+            console.warn('[StreamPulse Player] HLS error:', data.type, data.details, 'Fatal:', data.fatal);
             if (data.fatal) {
-              console.warn('[RPi Player] HLS fatal error:', data.type, data.details);
               if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
                 try {
                   hlsInstance.recoverMediaError();
                   safePlay(liveVideo);
                 } catch(e) {
-                  switchToOfflineMotion('Media Error Recovery Failed');
+                  switchToOfflineStandby('Media Error Recovery Failed');
                 }
+              } else if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                switchToOfflineStandby('Stream Stopped / Network Error (HTTP ' + (data.response ? data.response.code : 'offline') + ')');
               } else {
-                switchToOfflineMotion('HLS Network/Manifest Error');
+                switchToOfflineStandby('HLS Error');
               }
             }
           });
-        } else {
+        } else if (liveVideo.canPlayType('application/vnd.apple.mpegurl')) {
           liveVideo.src = cacheBustUrl;
           safePlay(liveVideo);
           updateStatus('live', 'Live (Native)', 'HLS Active');
+        } else {
+          switchToOfflineStandby('HLS Engine Missing');
+          return;
         }
+
+        function onLivePlaying() {
+          liveVideo.removeEventListener('playing', onLivePlaying);
+          if (currentState !== 'LIVE') return;
+
+          motionVideo.classList.add('hidden');
+          htmlFallback.classList.remove('active');
+          try { motionVideo.pause(); } catch(e) {}
+
+          liveVideo.classList.add('active');
+          updateStatus('live', 'Live • ' + (liveVideo.videoHeight || 1080) + 'p', 'Stream Key: ' + STREAM_KEY);
+        }
+        liveVideo.addEventListener('playing', onLivePlaying);
       }
+
+      liveVideo.addEventListener('error', function() {
+        if (currentState === 'LIVE') {
+          switchToOfflineStandby('Live Video Element Error');
+        }
+      });
 
       function startHlsPolling() {
         stopHlsPolling();
         pollTimer = setInterval(async () => {
-          if (currentState !== 'OFFLINE_MOTION') return;
+          if (currentState === 'LIVE') return;
           try {
             const checkUrl = HLS_URL + (HLS_URL.includes('?') ? '&' : '?') + '_t=' + Date.now();
             const res = await fetch(checkUrl, { method: 'GET', cache: 'no-store' });
-            if (res.ok) {
+            if (res.ok && res.status === 200) {
               const text = await res.text();
               if (text && text.includes('#EXTM3U')) {
-                console.log('[RPi Player] Valid HLS master playlist detected! Transitioning to live stream.');
+                console.log('[StreamPulse Player] Valid HLS playlist detected! Switching to live stream.');
                 switchToLiveHls();
               }
             }
           } catch(e) {
-            // HLS stream still offline
+            // Stream offline
           }
         }, 2000);
       }
@@ -987,60 +1180,25 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
         }
       }
 
-      // Motion video loop enforcement
-      motionVideo.addEventListener('ended', () => {
-        if (currentState === 'OFFLINE_MOTION') {
-          motionVideo.currentTime = 0;
-          safePlay(motionVideo);
-        }
-      });
-
-      // Unexpected pause recovery
-      liveVideo.addEventListener('pause', () => {
-        if (currentState === 'LIVE_HLS') {
-          safePlay(liveVideo);
-        }
-      });
-
-      motionVideo.addEventListener('pause', () => {
-        if (currentState === 'OFFLINE_MOTION') {
-          safePlay(motionVideo);
-        }
-      });
-
       // User interaction listener to allow unmuting
       function tryUnmute() {
-        const activeVideo = currentState === 'LIVE_HLS' ? liveVideo : motionVideo;
-        if (activeVideo && activeVideo.muted) {
-          activeVideo.muted = false;
-          setTimeout(() => {
-            if (activeVideo.paused) {
-              console.warn('[RPi Player] Unmute caused pause. Re-muting and resuming playback...');
-              activeVideo.muted = true;
-              safePlay(activeVideo);
-            }
-          }, 100);
+        if (currentState === 'LIVE' && liveVideo) {
+          liveVideo.muted = false;
         }
       }
       window.addEventListener('click', tryUnmute);
       window.addEventListener('touchstart', tryUnmute);
       window.addEventListener('keydown', tryUnmute);
 
-      // Periodic sanity checker
-      setInterval(() => {
-        if (currentState === 'LIVE_HLS' && liveVideo.paused) {
-          safePlay(liveVideo);
-        } else if (currentState === 'OFFLINE_MOTION' && motionVideo.paused) {
-          safePlay(motionVideo);
-        }
-      }, 3000);
-
       // Initial check on load
       (async function init() {
+        showOfflineVisuals();
+        updateStatus('reconnecting', 'Standby • Logo Active', 'Checking HLS stream...');
+
         try {
           const checkUrl = HLS_URL + (HLS_URL.includes('?') ? '&' : '?') + '_t=' + Date.now();
           const res = await fetch(checkUrl, { method: 'GET', cache: 'no-store' });
-          if (res.ok) {
+          if (res.ok && res.status === 200) {
             const text = await res.text();
             if (text && text.includes('#EXTM3U')) {
               switchToLiveHls();
@@ -1049,8 +1207,7 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
           }
         } catch(e) {}
         
-        // Default to offline Motion Logo loop if live stream is not instantly available
-        switchToOfflineMotion('Initial HLS Check Offline');
+        startHlsPolling();
       })();
 
     })();

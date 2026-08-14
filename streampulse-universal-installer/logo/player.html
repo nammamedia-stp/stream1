@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>StreamPulse Kiosk Player</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      background-color: #000000;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #ffffff;
+    }
+    .cursor-hidden {
+      cursor: none !important;
+    }
+    #player-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #000000;
+      overflow: hidden;
+    }
+    .kiosk-video {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      object-fit: contain;
+      background: #000000;
+      border: none;
+      outline: none;
+      transition: opacity 0.3s ease-in-out;
+    }
+    #live-video {
+      z-index: 20;
+      opacity: 0;
+      pointer-events: none;
+    }
+    #live-video.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    #motion-video {
+      z-index: 10;
+      opacity: 1;
+    }
+    #motion-video.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    #html-fallback {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 5;
+      background-color: #090d16;
+      color: #f8fafc;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 32px;
+    }
+    #html-fallback.active {
+      display: flex;
+    }
+    .pulse-ring {
+      width: 150px;
+      height: 150px;
+      border-radius: 50%;
+      border: 3px solid #6366f1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      animation: pulse-ring 2.8s infinite ease-in-out;
+      margin-bottom: 28px;
+      box-shadow: 0 0 30px rgba(99, 102, 241, 0.25);
+    }
+    .pulse-core {
+      width: 108px;
+      height: 108px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #4f46e5, #06b6d4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 20px rgba(6, 182, 212, 0.4);
+    }
+    .brand-title {
+      font-size: 34px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      background: linear-gradient(135deg, #ffffff 40%, #94a3b8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 6px;
+    }
+    .channel-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(30, 41, 59, 0.8);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      padding: 6px 16px;
+      border-radius: 9999px;
+      color: #818cf8;
+      font-size: 15px;
+      font-weight: 600;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      margin-top: 8px;
+    }
+    .channel-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: #f59e0b;
+      animation: blink 1.2s infinite;
+    }
+    .status-message {
+      color: #64748b;
+      font-size: 14px;
+      margin-top: 20px;
+      letter-spacing: 0.02em;
+    }
+    @keyframes pulse-ring {
+      0%, 100% {
+        transform: scale(1);
+        border-color: #6366f1;
+        opacity: 0.8;
+      }
+      50% {
+        transform: scale(1.1);
+        border-color: #06b6d4;
+        opacity: 1;
+        box-shadow: 0 0 45px rgba(6, 182, 212, 0.4);
+      }
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+    .status-overlay {
+      position: absolute;
+      bottom: 24px;
+      left: 24px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 8px 16px;
+      border-radius: 9999px;
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      z-index: 99;
+      transition: opacity 0.4s ease;
+      pointer-events: none;
+    }
+    .status-badge {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: #ef4444;
+    }
+    .status-badge.live {
+      background-color: #10b981;
+      box-shadow: 0 0 8px #10b981;
+    }
+    .status-badge.offline {
+      background-color: #f59e0b;
+      animation: pulse-dot 1.4s infinite;
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+  </style>
+</head>
+<body class="cursor-hidden">
+  <div id="player-container">
+    <!-- 1. Live HLS Video Element -->
+    <video id="live-video" class="kiosk-video" playsinline muted preload="auto"></video>
+
+    <!-- 2. Permanent Offline Motion Logo Video Element -->
+    <video id="motion-video" class="kiosk-video" autoplay loop muted playsinline preload="auto">
+      <source src="motion-logo.mp4" type="video/mp4">
+      <source src="/opt/streampulse/logo/motion-logo.mp4" type="video/mp4">
+    </video>
+
+    <!-- 3. Local HTML Fallback (when MP4 is unplayable) -->
+    <div id="html-fallback">
+      <div class="pulse-ring">
+        <div class="pulse-core">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+        </div>
+      </div>
+      <div class="brand-title">StreamPulse</div>
+      <div class="channel-badge">
+        <span class="channel-dot"></span>
+        <span id="fallback-channel-name">Channel Standby</span>
+      </div>
+      <div id="fallback-status" class="status-message">Waiting for live broadcast stream...</div>
+    </div>
+
+    <!-- 4. Subtle Overlay Status Badge -->
+    <div id="status-overlay" class="status-overlay">
+      <div id="status-badge" class="status-badge offline"></div>
+      <span id="status-text">Standby • StreamPulse Logo Active</span>
+      <span id="status-metrics" style="color: #94a3b8; border-left: 1px solid #334155; padding-left: 8px;">Polling stream...</span>
+    </div>
+  </div>
+
+  <!-- Dynamic HLS.js Loader (Local copy preferred, CDN fallback) -->
+  <script>
+    (function loadHlsScript() {
+      if (window.Hls) return;
+      const script = document.createElement('script');
+      script.src = 'hls.min.js';
+      script.onerror = function() {
+        console.warn('[StreamPulse Player] Local hls.min.js not found, trying CDN...');
+        const cdnScript = document.createElement('script');
+        cdnScript.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js';
+        document.head.appendChild(cdnScript);
+      };
+      document.head.appendChild(script);
+    })();
+  </script>
+
+  <script>
+    (function() {
+      // --------------------------------------------------
+      // Configuration & Parameter Extraction
+      // --------------------------------------------------
+      const params = new URLSearchParams(window.location.search);
+      const channelName = params.get('channel') || params.get('channelName') || 'channel1';
+      const streamKey = params.get('key') || params.get('streamKey') || 'live_stream';
+      let serverUrl = params.get('server') || params.get('serverUrl') || '';
+      
+      if (!serverUrl) {
+        if (window.location.protocol.startsWith('http')) {
+          serverUrl = window.location.origin;
+        } else {
+          serverUrl = 'http://187.127.210.81';
+        }
+      }
+      serverUrl = serverUrl.replace(/\/+$/, '');
+
+      // Direct HLS override if specified
+      const directHlsUrl = params.get('hls') || '';
+
+      // Elements
+      const liveVideo = document.getElementById('live-video');
+      const motionVideo = document.getElementById('motion-video');
+      const htmlFallback = document.getElementById('html-fallback');
+      const fallbackChannelName = document.getElementById('fallback-channel-name');
+      const fallbackStatus = document.getElementById('fallback-status');
+      const statusOverlay = document.getElementById('status-overlay');
+      const statusBadge = document.getElementById('status-badge');
+      const statusText = document.getElementById('status-text');
+      const statusMetrics = document.getElementById('status-metrics');
+
+      if (fallbackChannelName) {
+        fallbackChannelName.textContent = 'Channel: ' + channelName;
+      }
+
+      // Candidate HLS URLs in priority order
+      const candidateHlsUrls = directHlsUrl ? [directHlsUrl] : [
+        serverUrl + '/hls/' + channelName + '.m3u8',
+        serverUrl + '/hls/' + channelName + '/master.m3u8',
+        serverUrl + '/hls/' + channelName + '/index.m3u8',
+        serverUrl + '/hls/' + streamKey + '/master.m3u8',
+        serverUrl + '/hls/' + streamKey + '/index.m3u8'
+      ];
+
+      // State Machine Variables
+      let currentState = 'STANDBY'; // 'STANDBY' | 'LIVE'
+      let activeHlsUrl = '';
+      let hlsInstance = null;
+      let pollIntervalTimer = null;
+      let isProbing = false;
+      let mp4Failed = false;
+      let overlayFadeTimer = null;
+
+      // --------------------------------------------------
+      // UI / Cursor Auto-Hide & Status Badge Helpers
+      // --------------------------------------------------
+      let mouseTimer = null;
+      function resetCursor() {
+        document.body.classList.remove('cursor-hidden');
+        clearTimeout(mouseTimer);
+        mouseTimer = setTimeout(() => {
+          document.body.classList.add('cursor-hidden');
+        }, 2500);
+      }
+      window.addEventListener('mousemove', resetCursor);
+      window.addEventListener('keydown', resetCursor);
+      resetCursor();
+
+      function updateStatus(mode, title, detail, autoHideMs) {
+        statusBadge.className = 'status-badge ' + (mode === 'live' ? 'live' : 'offline');
+        statusText.textContent = title || '';
+        statusMetrics.textContent = detail || '';
+        statusOverlay.style.opacity = '1';
+
+        clearTimeout(overlayFadeTimer);
+        if (autoHideMs && autoHideMs > 0) {
+          overlayFadeTimer = setTimeout(() => {
+            statusOverlay.style.opacity = '0';
+          }, autoHideMs);
+        }
+      }
+
+      // --------------------------------------------------
+      // Safe Video Playback Utilities
+      // --------------------------------------------------
+      function safePlay(videoEl) {
+        if (!videoEl) return Promise.resolve();
+        videoEl.muted = true;
+        videoEl.playsInline = true;
+        const playPromise = videoEl.play();
+        if (playPromise !== undefined) {
+          return playPromise.catch(err => {
+            console.warn('[StreamPulse Player] Play rejected, retrying muted:', err.message);
+            videoEl.muted = true;
+            return videoEl.play().catch(e => {
+              console.warn('[StreamPulse Player] Muted play also failed:', e.message);
+            });
+          });
+        }
+        return Promise.resolve();
+      }
+
+      // User interaction listener to allow unmuting audio
+      function tryUnmute() {
+        if (currentState === 'LIVE' && liveVideo) {
+          liveVideo.muted = false;
+        }
+      }
+      window.addEventListener('click', tryUnmute);
+      window.addEventListener('touchstart', tryUnmute);
+      window.addEventListener('keydown', tryUnmute);
+
+      // --------------------------------------------------
+      // Motion Logo & Fallback HTML Handling
+      // --------------------------------------------------
+      function showOfflineVisuals() {
+        if (!mp4Failed) {
+          motionVideo.classList.remove('hidden');
+          htmlFallback.classList.remove('active');
+          motionVideo.currentTime = 0;
+          safePlay(motionVideo).catch(() => {
+            handleMp4Failure();
+          });
+        } else {
+          motionVideo.classList.add('hidden');
+          htmlFallback.classList.add('active');
+        }
+      }
+
+      function handleMp4Failure() {
+        mp4Failed = true;
+        console.warn('[StreamPulse Player] Motion Logo MP4 unavailable or unplayable. Activating HTML fallback.');
+        motionVideo.classList.add('hidden');
+        htmlFallback.classList.add('active');
+        if (fallbackStatus) {
+          fallbackStatus.textContent = 'Stream offline • Polling ' + serverUrl + '...';
+        }
+      }
+
+      motionVideo.addEventListener('error', handleMp4Failure);
+      motionVideo.addEventListener('stalled', () => {
+        if (currentState === 'STANDBY' && motionVideo.paused && !mp4Failed) {
+          safePlay(motionVideo);
+        }
+      });
+      motionVideo.addEventListener('ended', () => {
+        if (currentState === 'STANDBY' && !mp4Failed) {
+          motionVideo.currentTime = 0;
+          safePlay(motionVideo);
+        }
+      });
+
+      // --------------------------------------------------
+      // STATE A & C: Switch to Offline Standby (Logo / Fallback)
+      // --------------------------------------------------
+      function switchToOfflineStandby(reason) {
+        if (currentState === 'STANDBY') return;
+        currentState = 'STANDBY';
+        console.log('[StreamPulse Player] Entering STANDBY state. Reason:', reason || 'Stream Offline');
+
+        // 1. Destroy active HLS instance
+        if (hlsInstance) {
+          try {
+            hlsInstance.destroy();
+          } catch (e) {}
+          hlsInstance = null;
+        }
+
+        // 2. Hide & pause live video
+        liveVideo.classList.remove('active');
+        try {
+          liveVideo.pause();
+          liveVideo.removeAttribute('src');
+          liveVideo.load();
+        } catch (e) {}
+
+        // 3. Show & play offline logo visuals
+        showOfflineVisuals();
+
+        // 4. Update status overlay
+        updateStatus('offline', 'Stream Offline • Logo Active', 'Channel: ' + channelName, 0);
+
+        // 5. Resume background polling for HLS
+        startStreamPolling();
+      }
+
+      // --------------------------------------------------
+      // STATE B & D: Switch to Live HLS
+      // --------------------------------------------------
+      function switchToLiveHls(validHlsUrl) {
+        if (currentState === 'LIVE' && activeHlsUrl === validHlsUrl) return;
+        currentState = 'LIVE';
+        activeHlsUrl = validHlsUrl;
+        console.log('[StreamPulse Player] Entering LIVE state. HLS URL:', validHlsUrl);
+
+        // Stop polling while actively playing live stream
+        stopStreamPolling();
+
+        if (hlsInstance) {
+          try { hlsInstance.destroy(); } catch(e) {}
+          hlsInstance = null;
+        }
+
+        const cacheBustUrl = validHlsUrl + (validHlsUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
+
+        // If HLS.js is supported (Standard Chromium / Chrome / Firefox)
+        if (window.Hls && window.Hls.isSupported()) {
+          hlsInstance = new window.Hls({
+            enableWorker: true,
+            lowLatencyMode: true,
+            backBufferLength: 30,
+            maxBufferLength: 10,
+            liveBackBufferLength: 6,
+            manifestLoadingTimeOut: 6000,
+            manifestLoadingMaxRetry: 2,
+            levelLoadingTimeOut: 6000,
+            fragLoadingTimeOut: 8000
+          });
+
+          hlsInstance.attachMedia(liveVideo);
+          hlsInstance.loadSource(cacheBustUrl);
+
+          hlsInstance.on(window.Hls.Events.MANIFEST_PARSED, function() {
+            console.log('[StreamPulse Player] Live manifest parsed. Starting playback...');
+            safePlay(liveVideo);
+          });
+
+          hlsInstance.on(window.Hls.Events.ERROR, function(event, data) {
+            // NEVER TREAT 404 AS A FATAL UNRECOVERABLE APP CRASH!
+            console.warn('[StreamPulse Player] HLS event error:', data.type, data.details, 'Fatal:', data.fatal);
+
+            if (data.fatal) {
+              if (data.type === window.Hls.ErrorTypes.MEDIA_ERROR) {
+                console.log('[StreamPulse Player] Recovering from media error...');
+                try {
+                  hlsInstance.recoverMediaError();
+                  safePlay(liveVideo);
+                } catch (e) {
+                  switchToOfflineStandby('Media Error Unrecoverable');
+                }
+              } else if (data.type === window.Hls.ErrorTypes.NETWORK_ERROR) {
+                // Manifest / Fragment 404 or stream offline
+                switchToOfflineStandby('Stream Endpoint Returned Error/404');
+              } else {
+                switchToOfflineStandby('Fatal HLS Error');
+              }
+            }
+          });
+        } else if (liveVideo.canPlayType('application/vnd.apple.mpegurl')) {
+          // Native Safari / HLS
+          liveVideo.src = cacheBustUrl;
+          safePlay(liveVideo);
+        } else {
+          console.error('[StreamPulse Player] No HLS playback engine available.');
+          switchToOfflineStandby('HLS Engine Missing');
+          return;
+        }
+
+        // When live video actually starts rendering frames
+        function onLivePlaying() {
+          liveVideo.removeEventListener('playing', onLivePlaying);
+          if (currentState !== 'LIVE') return;
+
+          // Transition visuals: Hide logo & show live stream
+          motionVideo.classList.add('hidden');
+          htmlFallback.classList.remove('active');
+          try { motionVideo.pause(); } catch(e) {}
+
+          liveVideo.classList.add('active');
+
+          const h = liveVideo.videoHeight || 1080;
+          updateStatus('live', 'Live • ' + h + 'p', 'Channel: ' + channelName, 6000);
+        }
+        liveVideo.addEventListener('playing', onLivePlaying);
+      }
+
+      // Monitor live video stalls or errors
+      liveVideo.addEventListener('error', function(e) {
+        if (currentState === 'LIVE') {
+          console.warn('[StreamPulse Player] Live video element error. Falling back to logo.');
+          switchToOfflineStandby('Live Video Error');
+        }
+      });
+
+      // --------------------------------------------------
+      // Robust Asynchronous HLS Stream Poller
+      // --------------------------------------------------
+      async function checkStreamAvailability() {
+        if (isProbing || currentState === 'LIVE') return;
+        isProbing = true;
+
+        for (const testUrl of candidateHlsUrls) {
+          try {
+            const probeUrl = testUrl + (testUrl.includes('?') ? '&' : '?') + '_probe=' + Date.now();
+            const res = await fetch(probeUrl, {
+              method: 'GET',
+              cache: 'no-store',
+              headers: { 'Accept': 'application/x-mpegURL, application/vnd.apple.mpegurl, */*' }
+            });
+
+            if (res.ok && res.status === 200) {
+              const text = await res.text();
+              if (text && text.includes('#EXTM3U')) {
+                console.log('[StreamPulse Player] Active HLS Stream verified at:', testUrl);
+                isProbing = false;
+                switchToLiveHls(testUrl);
+                return;
+              }
+            }
+          } catch (err) {
+            // Stream is offline or network connecting; continue gracefully
+          }
+        }
+
+        isProbing = false;
+      }
+
+      function startStreamPolling() {
+        stopStreamPolling();
+        // Probe immediately, then every 2 seconds
+        checkStreamAvailability();
+        pollIntervalTimer = setInterval(checkStreamAvailability, 2000);
+      }
+
+      function stopStreamPolling() {
+        if (pollIntervalTimer) {
+          clearInterval(pollIntervalTimer);
+          pollIntervalTimer = null;
+        }
+      }
+
+      // --------------------------------------------------
+      // Telemetry Heartbeat (Optional / Safe)
+      // --------------------------------------------------
+      setInterval(function sendHeartbeat() {
+        if (!serverUrl || !serverUrl.startsWith('http')) return;
+        fetch(serverUrl + '/api/rpi-player/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            channel: channelName,
+            streamKey: streamKey,
+            online_status: currentState === 'LIVE' ? 'playing' : 'offline_logo',
+            current_resolution: (liveVideo.videoWidth || 1920) + 'x' + (liveVideo.videoHeight || 1080),
+            engine: currentState === 'LIVE' ? 'HLS.js' : 'Motion Logo',
+            player_version: '2.0.0-universal'
+          })
+        }).catch(() => {});
+      }, 10000);
+
+      // --------------------------------------------------
+      // Initial Startup Execution
+      // --------------------------------------------------
+      // 1. Start Motion Logo loop immediately on boot
+      showOfflineVisuals();
+      updateStatus('offline', 'StreamPulse Standby', 'Channel: ' + channelName + ' • Probing stream...', 0);
+
+      // 2. Begin probing HLS streams
+      startStreamPolling();
+
+    })();
+  </script>
+</body>
+</html>

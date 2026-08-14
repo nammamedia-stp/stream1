@@ -133,7 +133,6 @@ declare -a LAUNCH_ARGS=(
   "--disable-features=TranslateUI"
   "--disable-save-password-bubble"
   "--allow-file-access-from-files"
-  "--disable-web-security"
   "--window-position=0,0"
   "--window-size=${SCREEN_WIDTH:-1920},${SCREEN_HEIGHT:-1080}"
 )
@@ -148,10 +147,26 @@ if [[ -n "${CHROMIUM_EXTRA_FLAGS:-}" ]]; then
   done
 fi
 
-# Append target dashboard URL
-LAUNCH_ARGS+=("${DASHBOARD_URL}")
+# Determine target URL:
+# If DASHBOARD_URL is empty, points to an .m3u8 stream, /hls/, local player, or if external dashboard is unreachable:
+LOCAL_PLAYER="file:///opt/streampulse/logo/player.html"
+TARGET_URL="${DASHBOARD_URL:-}"
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Launching Kiosk Browser with dedicated profile and basic keyring suppression..."
+if [[ -z "${TARGET_URL}" ]] || [[ "${TARGET_URL}" =~ \.m3u8 ]] || [[ "${TARGET_URL}" =~ /hls/ ]] || [[ "${TARGET_URL}" == "file://"* ]] || [[ "${TARGET_URL}" == *"/logo/player.html"* ]]; then
+  TARGET_URL="${LOCAL_PLAYER}?channel=${CHANNEL_NAME:-channel1}&server=${SERVER_URL:-http://187.127.210.81}&key=${STREAM_KEY:-live_stream}"
+elif [[ "${TARGET_URL}" =~ ^https?:// ]]; then
+  # If remote HTTP URL, check if reachable. If unreachable or 404/5xx, fallback to local resilient player
+  HTTP_STATUS="$(curl -s -o /dev/null -w "%{http_code}" -m 3 "${TARGET_URL}" 2>/dev/null || echo "000")"
+  if [[ ! "${HTTP_STATUS}" =~ ^(200|301|302|304)$ ]]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] DASHBOARD_URL returned HTTP ${HTTP_STATUS} (offline/unavailable). Launching local resilient player..."
+    TARGET_URL="${LOCAL_PLAYER}?channel=${CHANNEL_NAME:-channel1}&server=${SERVER_URL:-http://187.127.210.81}&key=${STREAM_KEY:-live_stream}"
+  fi
+fi
+
+# Append target dashboard URL
+LAUNCH_ARGS+=("${TARGET_URL}")
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Launching Kiosk Browser (${TARGET_URL}) with dedicated profile and basic keyring suppression..."
 
 # 10. Execute Browser (Supervised by systemd)
 exec "${BROWSER_BIN}" "${LAUNCH_ARGS[@]}"

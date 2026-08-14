@@ -8,10 +8,14 @@
 set -uo pipefail
 
 # Detect Target User & Home
-TARGET_USER="${1:-${SUDO_USER:-$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $3}' | head -n 1)}}"
+TARGET_USER="${1:-${SUDO_USER:-$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $3}' | grep -v '^root$' | head -n 1 || awk -F: '$3 == 1000 {print $1}' /etc/passwd 2>/dev/null || stat -c '%U' /opt/streampulse/config 2>/dev/null || echo '')}}"
 if [[ -z "${TARGET_USER}" ]] || [[ "${TARGET_USER}" == "root" ]]; then
-  # Fallback to UID 1000 user if available
-  TARGET_USER="$(awk -F: '$3 == 1000 {print $1}' /etc/passwd 2>/dev/null || echo "himakara")"
+  TARGET_USER="$(awk -F: '$3 >= 1000 && $3 < 60000 && $7 !~ /(nologin|false)/ {print $1}' /etc/passwd | head -n1 || echo '')"
+fi
+
+if [[ -z "${TARGET_USER}" ]]; then
+  echo "Error: Could not resolve a valid non-root user for backup." >&2
+  exit 1
 fi
 
 USER_HOME="$(getent passwd "${TARGET_USER}" | cut -d: -f6)"

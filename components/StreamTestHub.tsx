@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   ShieldCheck, 
   Activity, 
@@ -355,7 +355,18 @@ export const StreamTestHub: React.FC<StreamTestHubProps> = ({ streams, activeEnd
   const currentProto = resolvedBaseUrl !== 'Endpoint unavailable' ? resolvedBaseUrl.split('://')[0] + ':' : 'Endpoint unavailable';
   const currentHost = resolvedBaseUrl !== 'Endpoint unavailable' ? resolvedBaseUrl.split('://')[1] || 'Endpoint unavailable' : 'Endpoint unavailable';
 
-  const hlsUrl = selectedStream ? (selectedStream.playbackUrls?.master || 'Endpoint unavailable') : 'Endpoint unavailable';
+  const hlsUrl = useMemo(() => {
+    if (selectedStream?.playbackUrls?.master && !selectedStream.playbackUrls.master.includes('Endpoint unavailable')) {
+      return selectedStream.playbackUrls.master;
+    }
+    if (selectedStream) {
+      const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+      const proto = typeof window !== 'undefined' ? window.location.protocol : 'http:';
+      const port = typeof window !== 'undefined' && window.location.port && window.location.port !== '80' && window.location.port !== '443' ? `:${window.location.port}` : '';
+      return `${proto}//${host}${port}/hls/${selectedStream.streamKey}/master.m3u8`;
+    }
+    return 'Endpoint unavailable';
+  }, [selectedStream]);
   const dashUrl = selectedStream ? (selectedStream.playbackUrls?.dash || 'Endpoint unavailable') : 'Endpoint unavailable';
   const embedUrl = selectedStream ? (selectedStream.playbackUrls?.embed || 'Endpoint unavailable') : 'Endpoint unavailable';
 

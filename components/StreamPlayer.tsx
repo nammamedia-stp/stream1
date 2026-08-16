@@ -1113,19 +1113,19 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
   
   // Resolve effective HLS URL using backend provided master playlist or browser origin fallback
   const effectiveHlsUrl = useMemo(() => {
-    if (stream.playbackUrls?.master && !stream.playbackUrls.master.includes('Endpoint unavailable') && !stream.playbackUrls.master.includes('localhost')) {
+    if (stream.playbackUrls?.master && !stream.playbackUrls.master.includes('Endpoint unavailable')) {
       return stream.playbackUrls.master;
     }
     const host = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
     const proto = typeof window !== 'undefined' ? window.location.protocol : 'http:';
-    const port = typeof window !== 'undefined' && window.location.port ? `:${window.location.port}` : '';
+    const port = typeof window !== 'undefined' && window.location.port && window.location.port !== '80' && window.location.port !== '443' ? `:${window.location.port}` : '';
     return `${proto}//${host}${port}/hls/${stream.streamKey}/master.m3u8`;
   }, [stream.playbackUrls?.master, stream.streamKey]);
 
   const hlsUrl = effectiveHlsUrl;
   const dashUrl = stream.playbackUrls?.dash && !stream.playbackUrls.dash.includes('Endpoint unavailable') 
     ? stream.playbackUrls.dash 
-    : (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}${window.location.port ? ':' + window.location.port : ''}/dash/${stream.streamKey}/manifest.mpd` : 'Endpoint unavailable');
+    : (typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.hostname}${window.location.port && window.location.port !== '80' && window.location.port !== '443' ? ':' + window.location.port : ''}/dash/${stream.streamKey}/manifest.mpd` : 'Endpoint unavailable');
   const embedUrl = stream.playbackUrls?.embed || 'Endpoint unavailable';
 
   // Automatically trigger active playback state when stream transitions to live, or flush video buffer on offline
@@ -1251,10 +1251,11 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       console.log('[HLS_RECOVERY] checking stream availability');
 
       try {
-        // Step A: Check master manifest with bounded timeout (1500ms) and cache-busting
-        const freshManifestUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}?_t=${now}`;
+        // Step A: Check master manifest with bounded timeout (3000ms) and cache-busting
+        const masterSep = hlsUrl.includes('?') ? '&' : '?';
+        const freshManifestUrl = `${hlsUrl}${masterSep}_t=${now}`;
         const masterController = new AbortController();
-        const masterTimeout = setTimeout(() => masterController.abort(), 1500);
+        const masterTimeout = setTimeout(() => masterController.abort(), 3000);
 
         let masterRes: Response | null = null;
         try {
@@ -1284,13 +1285,19 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
               }
             }
 
-            const variantBase = freshManifestUrl.substring(0, freshManifestUrl.lastIndexOf('/') + 1);
-            const variantUrl = variantRelPath.startsWith('http')
-              ? `${variantRelPath}${variantRelPath.includes('?') ? '&' : '?'}?_t=${now}`
-              : `${variantBase}${variantRelPath}${variantRelPath.includes('?') ? '&' : '?'}?_t=${now}`;
+            let variantUrl = '';
+            if (variantRelPath.startsWith('http://') || variantRelPath.startsWith('https://')) {
+              const vSep = variantRelPath.includes('?') ? '&' : '?';
+              variantUrl = `${variantRelPath}${vSep}_t=${now}`;
+            } else {
+              const manifestBase = freshManifestUrl.substring(0, freshManifestUrl.lastIndexOf('/') + 1);
+              const cleanRel = variantRelPath.startsWith('/') ? variantRelPath.slice(1) : variantRelPath;
+              const vSep = cleanRel.includes('?') ? '&' : '?';
+              variantUrl = `${manifestBase}${cleanRel}${vSep}_t=${now}`;
+            }
 
             const variantController = new AbortController();
-            const variantTimeout = setTimeout(() => variantController.abort(), 1500);
+            const variantTimeout = setTimeout(() => variantController.abort(), 3000);
 
             let variantRes: Response | null = null;
             try {
@@ -1321,15 +1328,19 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
                 }
 
                 if (segmentFileName) {
-                  const variantBaseDir = variantUrl.substring(0, variantUrl.lastIndexOf('/') + 1);
-                  const segmentUrl = segmentFileName.startsWith('http')
-                    ? `${segmentFileName}${segmentFileName.includes('?') ? '&' : '?'}?_t=${now}`
-                    : `${variantBaseDir}${segmentFileName}${segmentFileName.includes('?') ? '&' : '?'}?_t=${now}`;
+                  let segmentUrl = '';
+                  if (segmentFileName.startsWith('http://') || segmentFileName.startsWith('https://')) {
+                    segmentUrl = segmentFileName;
+                  } else {
+                    const variantBaseDir = variantUrl.substring(0, variantUrl.lastIndexOf('/') + 1);
+                    const cleanSeg = segmentFileName.startsWith('/') ? segmentFileName.slice(1) : segmentFileName;
+                    segmentUrl = `${variantBaseDir}${cleanSeg}`;
+                  }
 
                   // Step D: Preflight check segment availability
                   let segmentOk = false;
                   const segController = new AbortController();
-                  const segTimeout = setTimeout(() => segController.abort(), 1500);
+                  const segTimeout = setTimeout(() => segController.abort(), 3000);
 
                   try {
                     const segRes = await fetch(segmentUrl, {
@@ -1419,14 +1430,14 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
-    // Custom loader subclass that appends cache-busting timestamp to ALL Hls.js network requests
+    // Custom loader subclass that appends cache-busting timestamp ONLY to playlist requests (.m3u8)
     const createCacheBustingLoader = (HlsTargetClass: any) => {
       const BaseLoader = HlsTargetClass?.DefaultConfig?.loader || HlsTargetClass?.DefaultConfig?.fLoader;
       if (!BaseLoader) return null;
 
       return class CacheBustingLoader extends BaseLoader {
         load(context: any, config: any, callbacks: any) {
-          if (context && context.url) {
+          if (context && context.url && context.url.includes('.m3u8')) {
             const url = context.url;
             const separator = url.includes('?') ? '&' : '?';
             if (!url.includes('_t=')) {
@@ -1450,27 +1461,22 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       highBufferWatchdogPeriod: 2,
       nudgeOffset: 0.1,
       nudgeMaxRetry: 5,
-      liveSyncDurationCount: 2,
-      liveMaxLatencyDurationCount: 6,
+      liveSyncDurationCount: 3,
+      liveMaxLatencyDurationCount: 8,
       initialLiveManifestSize: 1,
       liveDurationInfinity: true,
       backBufferLength: 0,
       startPosition: -1,
       capLevelToPlayerSize: isMobile,
-      xhrSetup: (xhr: XMLHttpRequest) => {
-        xhr.setRequestHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-        xhr.setRequestHeader('Pragma', 'no-cache');
-        xhr.setRequestHeader('Expires', '0');
-      },
-      manifestLoadingMaxRetry: 2,
-      manifestLoadingRetryDelay: 300,
-      manifestLoadingMaxRetryTimeout: 1000,
-      levelLoadingMaxRetry: 2,
-      levelLoadingRetryDelay: 300,
-      levelLoadingMaxRetryTimeout: 1000,
-      fragLoadingMaxRetry: 2,
-      fragLoadingRetryDelay: 300,
-      fragLoadingMaxRetryTimeout: 1000,
+      manifestLoadingMaxRetry: 4,
+      manifestLoadingRetryDelay: 500,
+      manifestLoadingTimeOut: 10000,
+      levelLoadingMaxRetry: 4,
+      levelLoadingRetryDelay: 500,
+      levelLoadingTimeOut: 10000,
+      fragLoadingMaxRetry: 4,
+      fragLoadingRetryDelay: 500,
+      fragLoadingTimeOut: 20000,
     };
 
     if (customLoader) {
@@ -1485,7 +1491,8 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     // STEP 1: Register MEDIA_ATTACHED handler BEFORE calling attachMedia()
     hls.on(HlsClass.Events.MEDIA_ATTACHED, () => {
       if (sessionId !== playbackSessionIdRef.current) return;
-      const freshManifestUrl = `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}?_t=${Date.now()}`;
+      const masterSep = baseUrl.includes('?') ? '&' : '?';
+      const freshManifestUrl = `${baseUrl}${masterSep}_t=${Date.now()}`;
       console.log(`[StreamPlayer Engine] MEDIA_ATTACHED confirmed. Loading source: ${freshManifestUrl}`);
       hls.loadSource(freshManifestUrl);
     });
@@ -1656,7 +1663,8 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
           if (Hls && Hls.isSupported()) {
             startReconnectEngine(Hls, 'initial_mount');
           } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            const cacheBustUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+            const cacheSep = hlsUrl.includes('?') ? '&' : '?';
+            const cacheBustUrl = `${hlsUrl}${cacheSep}_t=${Date.now()}`;
             video.src = cacheBustUrl;
             video.addEventListener('loadedmetadata', () => {
               if (currentSessionId === playbackSessionIdRef.current) safePlayVideo(video);
@@ -1727,7 +1735,8 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       } else if (stream.status !== 'live') {
         // Proactive Offline-to-Live Auto-Start Monitor
         try {
-          const checkUrl = `${hlsUrl}${hlsUrl.includes('?') ? '&' : '?'}t=${Date.now()}`;
+          const checkSep = hlsUrl.includes('?') ? '&' : '?';
+          const checkUrl = `${hlsUrl}${checkSep}_t=${Date.now()}`;
           const res = await fetch(checkUrl, { method: 'GET', cache: 'no-store' });
           if (res.ok) {
             const text = await res.text();

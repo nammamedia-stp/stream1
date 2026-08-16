@@ -19,7 +19,7 @@
       "created_at": "2026-07-27T13:32:32.038Z",
       "status": "enabled",
       "assigned_stream_id": null,
-      "login_history": "[{\"timestamp\":\"2026-07-28T13:45:18.949Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:45:16.170Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:45:13.212Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:17:24.163Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:17:21.415Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:17:16.591Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:17:11.507Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:17:08.589Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:17:05.673Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:17:02.306Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T16:43:26.694Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T16:43:20.536Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T16:43:20.433Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T16:43:20.323Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T16:43:00.595Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T16:43:00.488Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T16:42:32.040Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T15:40:15.777Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T15:18:47.014Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T15:18:32.749Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T14:59:16.491Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T13:48:30.737Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T13:38:35.354Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T13:38:09.625Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T13:32:47.952Z\",\"ip\":\"127.0.0.1\"}]",
+      "login_history": "[{\"timestamp\":\"2026-08-16T07:25:09.451Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-08-16T07:25:02.479Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-08-16T07:24:47.402Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-08-16T07:24:30.518Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-08-16T07:23:29.379Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-08-16T07:23:27.035Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:45:18.949Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:45:16.170Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:45:13.212Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:17:24.163Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:17:21.415Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:17:16.591Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:17:11.507Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:17:08.589Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:17:05.673Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-28T13:17:02.306Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T16:43:26.694Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T16:43:20.536Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T16:43:20.433Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T16:43:20.323Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T16:43:00.595Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T16:43:00.488Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T16:42:32.040Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T15:40:15.777Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T15:18:47.014Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T15:18:32.749Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T14:59:16.491Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T13:48:30.737Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T13:38:35.354Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T13:38:09.625Z\",\"ip\":\"127.0.0.1\"},{\"timestamp\":\"2026-07-27T13:32:47.952Z\",\"ip\":\"127.0.0.1\"}]",
       "display_name": "admin"
     },
     {
@@ -96,13 +96,13 @@
       "title": "Primary Production Stream",
       "broadcaster": "StreamPulse",
       "streamKey": "live_b716n131pipxgbbg",
-      "status": "offline",
+      "status": "live",
       "rtmpUrl": "rtmp://localhost/live",
       "resolution": "1080p",
       "bitrate": 6000,
       "codec": "H.264",
       "ingestIp": "127.0.0.1",
-      "startTime": "2026-08-09T16:20:54.688Z",
+      "startTime": "2026-08-16T07:25:09.466Z",
       "viewers": 0,
       "width": 1920,
       "height": 1080,
@@ -257,11 +257,84 @@
   "playbackHistory": [],
   "deviceLogs": [],
   "deviceSchedules": [],
-  "auditLogs": [],
+  "auditLogs": [
+    {
+      "id": "audit_1786865109452_i0gh0r",
+      "timestamp": "2026-08-16T07:25:09.452Z",
+      "username": "admin",
+      "user_role": "admin",
+      "action": "Login",
+      "module": "Authentication",
+      "ip_address": "127.0.0.1",
+      "user_agent": "node",
+      "result": "success",
+      "details": "User authenticated successfully as admin"
+    },
+    {
+      "id": "audit_1786865102480_v9pzyk",
+      "timestamp": "2026-08-16T07:25:02.480Z",
+      "username": "admin",
+      "user_role": "admin",
+      "action": "Login",
+      "module": "Authentication",
+      "ip_address": "127.0.0.1",
+      "user_agent": "node",
+      "result": "success",
+      "details": "User authenticated successfully as admin"
+    },
+    {
+      "id": "audit_1786865087404_j3hroy",
+      "timestamp": "2026-08-16T07:24:47.404Z",
+      "username": "admin",
+      "user_role": "admin",
+      "action": "Login",
+      "module": "Authentication",
+      "ip_address": "127.0.0.1",
+      "user_agent": "node",
+      "result": "success",
+      "details": "User authenticated successfully as admin"
+    },
+    {
+      "id": "audit_1786865070520_eg8ilc",
+      "timestamp": "2026-08-16T07:24:30.520Z",
+      "username": "admin",
+      "user_role": "admin",
+      "action": "Login",
+      "module": "Authentication",
+      "ip_address": "127.0.0.1",
+      "user_agent": "node",
+      "result": "success",
+      "details": "User authenticated successfully as admin"
+    },
+    {
+      "id": "audit_1786865009381_yqfas4",
+      "timestamp": "2026-08-16T07:23:29.381Z",
+      "username": "admin",
+      "user_role": "admin",
+      "action": "Login",
+      "module": "Authentication",
+      "ip_address": "127.0.0.1",
+      "user_agent": "curl/7.88.1",
+      "result": "success",
+      "details": "User authenticated successfully as admin"
+    },
+    {
+      "id": "audit_1786865007038_98k8ot",
+      "timestamp": "2026-08-16T07:23:27.038Z",
+      "username": "admin",
+      "user_role": "admin",
+      "action": "Login",
+      "module": "Authentication",
+      "ip_address": "127.0.0.1",
+      "user_agent": "curl/7.88.1",
+      "result": "success",
+      "details": "User authenticated successfully as admin"
+    }
+  ],
   "appSettings": {
-    "server_settings": "{\"deploymentMode\":\"auto\",\"customDomain\":\"\",\"manualIp\":\"\",\"setupCompleted\":true,\"ssl\":{\"installed\":false,\"status\":\"none\",\"expirationDate\":\"\",\"issuer\":\"\",\"httpsStatus\":\"disabled\"},\"streaming\":{\"rtmpPort\":1935,\"httpPort\":3000,\"httpsPort\":443,\"hlsSegmentDuration\":4,\"playlistLength\":5,\"recordingEnabled\":false,\"ffmpegProfiles\":{\"1080p\":true,\"720p\":true,\"480p\":true,\"360p\":true}},\"lastDetectedPublicIp\":\"34.96.48.67\",\"timezone\":\"Asia/Calcutta\"}",
+    "server_settings": "{\"deploymentMode\":\"auto\",\"customDomain\":\"\",\"manualIp\":\"\",\"setupCompleted\":true,\"ssl\":{\"installed\":false,\"status\":\"none\",\"expirationDate\":\"\",\"issuer\":\"\",\"httpsStatus\":\"disabled\"},\"streaming\":{\"rtmpPort\":1935,\"httpPort\":3000,\"httpsPort\":443,\"hlsSegmentDuration\":4,\"playlistLength\":5,\"recordingEnabled\":false,\"ffmpegProfiles\":{\"1080p\":true,\"720p\":true,\"480p\":true,\"360p\":true}},\"lastDetectedPublicIp\":\"34.96.48.66\",\"timezone\":\"Asia/Calcutta\"}",
     "dashboard_preferences": "{\"activeTab\":\"dashboard\",\"manualIp\":\"\",\"customDomain\":\"\",\"creationIpMode\":\"auto\",\"deploymentMode\":\"auto\"}",
-    "backup_last_run": "2026-08-09T07:17:02.887Z",
-    "backup_next_run": "2026-08-10T07:17:02.884Z"
+    "backup_last_run": "2026-08-16T07:12:11.052Z",
+    "backup_next_run": "2026-08-17T07:12:11.048Z"
   }
 }

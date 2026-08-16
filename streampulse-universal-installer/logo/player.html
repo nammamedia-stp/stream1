@@ -288,12 +288,14 @@
 
       // Candidate HLS URLs in priority order
       const candidateHlsUrls = directHlsUrl ? [directHlsUrl] : [
-        serverUrl + '/hls/' + channelName + '.m3u8',
-        serverUrl + '/hls/' + channelName + '/master.m3u8',
-        serverUrl + '/hls/' + channelName + '/index.m3u8',
         serverUrl + '/hls/' + streamKey + '/master.m3u8',
-        serverUrl + '/hls/' + streamKey + '/index.m3u8'
-      ];
+        serverUrl + '/hls/' + streamKey + '/Original/index.m3u8',
+        serverUrl + '/hls/' + streamKey + '/index.m3u8',
+        serverUrl + '/hls/' + channelName + '/master.m3u8',
+        serverUrl + '/hls/' + channelName + '/Original/index.m3u8',
+        serverUrl + '/hls/' + channelName + '/index.m3u8',
+        serverUrl + '/hls/' + channelName + '.m3u8'
+      ].filter((url, idx, arr) => url && arr.indexOf(url) === idx);
 
       // State Machine Variables
       let currentState = 'STANDBY'; // 'STANDBY' | 'LIVE'

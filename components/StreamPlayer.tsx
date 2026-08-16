@@ -1154,33 +1154,44 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
   const lastPlaybackTimeRef = useRef<number>(0);
   const lastPlaybackTimeUpdateRef = useRef<number>(Date.now());
   const videoListenersRef = useRef<Array<{ type: string; fn: any }>>([]);
+  const isUserUnmutedRef = useRef<boolean>(false);
 
-  // Helper to safely execute play with muted fallback if browser blocks unmuted play (NEVER set volume state to 0)
-  const safePlayVideo = async (video: HTMLVideoElement) => {
-    if (!video) return;
-    video.volume = volume / 100;
+  // Helper to execute ONE safe, guarded muted autoplay attempt per initialization
+  const attemptMutedAutoplay = (video: HTMLVideoElement, sessionId: number) => {
+    if (!video || sessionId !== playbackSessionIdRef.current) return;
+
+    // Requirement 1 & 5: Ensure muted, autoplay, playsInline
+    video.defaultMuted = true;
+    video.muted = true;
+    video.autoplay = true;
+    video.playsInline = true;
+
+    // Requirement 5: Verify Hls is attached and active
+    if (!hlsInstanceRef.current && playerProtocol === 'hls') {
+      console.warn('[StreamPlayer Autoplay] Hls instance not active; aborting autoplay attempt.');
+      return;
+    }
+
+    console.log(`[StreamPlayer Autoplay] Attempting guarded muted play (sessionId=${sessionId}, readyState=${video.readyState})...`);
 
     try {
-      if (volume === 0) {
-        video.muted = true;
-      }
       const playPromise = video.play();
       if (playPromise !== undefined && typeof playPromise.then === 'function') {
-        await playPromise;
+        playPromise
+          .then(() => {
+            if (sessionId === playbackSessionIdRef.current) {
+              console.log(`[StreamPlayer Autoplay] Muted autoplay successfully started for session ${sessionId}.`);
+              setIsVideoPlaying(true);
+            }
+          })
+          .catch((err: any) => {
+            // Requirement 6 & 11: Log exact rejection name/message in development diagnostics
+            // DO NOT destroy Hls.js, DO NOT detach media, DO NOT reload source, DO NOT pause/reset video, DO NOT treat as fatal HLS error
+            console.warn(`[StreamPlayer Autoplay] Muted autoplay rejected by browser policy: ${err?.name || 'Error'} - ${err?.message || err}`);
+          });
       }
-      console.log('[StreamPlayer Engine] Playback started/resumed successfully.');
-    } catch (err: any) {
-      console.warn('[StreamPlayer Engine] Unmuted play blocked by browser policy, attempting muted play fallback while preserving user volume state:', err);
-      try {
-        video.muted = true;
-        const fallbackPromise = video.play();
-        if (fallbackPromise !== undefined && typeof fallbackPromise.then === 'function') {
-          await fallbackPromise;
-        }
-        console.log('[StreamPlayer Engine] Fallback muted playback started successfully.');
-      } catch (mutedErr) {
-        console.warn('[StreamPlayer Engine] Automatic playback start rejected by browser policy (user gesture required):', mutedErr);
-      }
+    } catch (syncErr: any) {
+      console.warn(`[StreamPlayer Autoplay] Synchronous play invocation error: ${syncErr?.name || 'Error'} - ${syncErr?.message || syncErr}`);
     }
   };
 
@@ -1494,6 +1505,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
     const hls = new HlsClass(hlsConfig);
     hlsInstanceRef.current = hls;
+    let autoplayAttempted = false;
 
     // STEP 1: Register MEDIA_ATTACHED handler BEFORE calling attachMedia()
     hls.on(HlsClass.Events.MEDIA_ATTACHED, () => {
@@ -1504,7 +1516,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       hls.loadSource(freshManifestUrl);
     });
 
-    // STEP 2: Handle MANIFEST_PARSED (parse levels and trigger safe autoplay once)
+    // STEP 2: Handle MANIFEST_PARSED (parse levels and trigger ONE guarded safe muted autoplay attempt)
     hls.on(HlsClass.Events.MANIFEST_PARSED, (event: any, data: any) => {
       if (sessionId !== playbackSessionIdRef.current) return;
       hls.currentLevel = -1;
@@ -1523,8 +1535,11 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       const uniqueLevels = Array.from(new Set(levels));
       setQualityLevels(['Auto', ...uniqueLevels]);
 
-      // Safe autoplay attempt
-      safePlayVideo(video);
+      // ONE guarded safe muted autoplay attempt per player initialization
+      if (!autoplayAttempted && sessionId === playbackSessionIdRef.current) {
+        autoplayAttempted = true;
+        attemptMutedAutoplay(video, sessionId);
+      }
     });
 
     // STEP 3: Handle FRAG_BUFFERED (clear reconnect state)
@@ -1628,8 +1643,11 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       const video = videoRef.current;
       if (!video || currentSessionId !== playbackSessionIdRef.current) return;
 
-      video.muted = volume === 0;
-      video.volume = volume / 100;
+      // Requirement 1 & 5: Ensure muted, autoplay, playsInline on HTMLVideoElement
+      video.defaultMuted = true;
+      video.muted = true;
+      video.autoplay = true;
+      video.playsInline = true;
 
       if (playerProtocol === 'hls') {
         try {
@@ -1644,8 +1662,8 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
             const cacheBustUrl = `${hlsUrl}${cacheSep}_t=${Date.now()}`;
             video.src = cacheBustUrl;
             video.addEventListener('loadedmetadata', () => {
-              if (currentSessionId === playbackSessionIdRef.current) safePlayVideo(video);
-            });
+              if (currentSessionId === playbackSessionIdRef.current) attemptMutedAutoplay(video, currentSessionId);
+            }, { once: true });
           }
         } catch (err) {
           console.error('[HLS Engine] HLS load script error:', err);
@@ -1668,7 +1686,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
                 const bitrates = player.getBitrateInfoListFor('video').map((b: any) => `${b.height}p`);
                 setQualityLevels(['Auto', ...bitrates]);
               }
-              safePlayVideo(video);
+              attemptMutedAutoplay(video, currentSessionId);
             });
           }
         } catch (err) {
@@ -1736,7 +1754,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
         if (video) {
           if (video.paused && !isRecoveringRef.current && !isPollingRef.current) {
             console.log('[StreamPlayer Visibility] Tab became visible, resuming playback...');
-            safePlayVideo(video);
+            attemptMutedAutoplay(video, playbackSessionIdRef.current);
           }
           if (video.error && !isRecoveringRef.current && !isPollingRef.current) {
             console.warn('[StreamPlayer Visibility] Tab became visible with video error, triggering reconnect...');
@@ -1753,9 +1771,9 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [isPlaying, stream.status]);
 
-  // Adjust volume dynamically
+  // Adjust volume dynamically only after explicit user interaction
   useEffect(() => {
-    if (videoRef.current) {
+    if (videoRef.current && isUserUnmutedRef.current) {
       videoRef.current.muted = volume === 0;
       videoRef.current.volume = volume / 100;
     }
@@ -1910,6 +1928,16 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     setRevealedPlaybacks(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const handleUserVolumeChange = (newVol: number) => {
+    isUserUnmutedRef.current = true;
+    setVolume(newVol);
+    const video = videoRef.current;
+    if (video) {
+      video.muted = newVol === 0;
+      video.volume = newVol / 100;
+    }
+  };
+
   const handleManualPlay = () => {
     if (!isPlaying) {
       setIsPlaying(true);
@@ -1918,6 +1946,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     const video = videoRef.current;
     if (video) {
       if (video.paused) {
+        isUserUnmutedRef.current = true;
         video.muted = volume === 0;
         video.volume = volume / 100;
         const p = video.play();
@@ -2072,7 +2101,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
                       
                       <div className="flex items-center gap-1">
                         <button
-                          onClick={() => setVolume(volume > 0 ? 0 : 80)}
+                          onClick={() => handleUserVolumeChange(volume > 0 ? 0 : 80)}
                           className="text-zinc-400 hover:text-white transition-colors cursor-pointer p-0.5"
                           title={volume === 0 ? "Unmute" : "Mute"}
                         >
@@ -2083,7 +2112,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
                           min="0" 
                           max="100" 
                           value={volume}
-                          onChange={(e) => setVolume(parseInt(e.target.value))}
+                          onChange={(e) => handleUserVolumeChange(parseInt(e.target.value))}
                           className="w-12 sm:w-16 h-1 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
                         />
                       </div>
@@ -2711,13 +2740,13 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
               )}
 
               <div className="flex items-center gap-2.5 pt-0.5">
-                <button onClick={() => setVolume(v => v === 0 ? 80 : 0)} className="text-zinc-500 hover:text-white transition-colors">
+                <button onClick={() => handleUserVolumeChange(volume === 0 ? 80 : 0)} className="text-zinc-500 hover:text-white transition-colors">
                   {volume === 0 ? <VolumeX className="w-3.5 h-3.5 sm:w-4 sm:h-4" /> : <Volume2 className="w-3.5 h-3.5 sm:w-4 sm:h-4" />}
                 </button>
                 <div className="flex-1">
                   <input 
                     type="range" min="0" max="100" value={volume}
-                    onChange={(e) => setVolume(parseInt(e.target.value))}
+                    onChange={(e) => handleUserVolumeChange(parseInt(e.target.value))}
                     className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
                   />
                 </div>

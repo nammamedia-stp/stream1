@@ -435,8 +435,10 @@ export const StreamTestHub: React.FC<StreamTestHubProps> = ({ streams, activeEnd
       }
 
       const video = videoRef.current;
-      video.muted = volume === 0;
-      video.volume = volume / 100;
+      video.defaultMuted = true;
+      video.muted = true;
+      video.autoplay = true;
+      video.playsInline = true;
 
       if (playerProtocol === 'hls') {
         try {
@@ -453,20 +455,28 @@ export const StreamTestHub: React.FC<StreamTestHubProps> = ({ streams, activeEnd
             hls.attachMedia(video);
             hlsInstanceRef.current = hls;
 
+            let autoplayAttempted = false;
+
             hls.on(Hls.Events.MANIFEST_PARSED, () => {
               if (!active) return;
-              video.muted = volume === 0;
-              video.volume = volume / 100;
-              const p = video.play();
-              if (p !== undefined && typeof p.then === 'function') {
-                p.catch(e => {
-                  console.log('[StreamTestHub] Unmuted autoplay blocked, attempting muted fallback:', e);
-                  video.muted = true;
-                  video.play().catch(err => console.log('[StreamTestHub] Autoplay prevented by browser policy:', err));
-                });
-              }
               const levels = hls.levels.map((l: any) => `${l.height}p`);
               setQualityLevels(['Auto', ...levels]);
+
+              if (!autoplayAttempted) {
+                autoplayAttempted = true;
+                video.defaultMuted = true;
+                video.muted = true;
+                video.autoplay = true;
+                video.playsInline = true;
+                const p = video.play();
+                if (p !== undefined && typeof p.then === 'function') {
+                  p.then(() => {
+                    console.log('[StreamTestHub] Muted autoplay succeeded.');
+                  }).catch(e => {
+                    console.warn(`[StreamTestHub] Muted autoplay rejected by browser policy: ${e?.name || 'Error'} - ${e?.message || e}`);
+                  });
+                }
+              }
             });
 
             hls.on(Hls.Events.ERROR, (event: any, data: any) => {

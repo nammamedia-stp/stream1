@@ -448,13 +448,24 @@ export const StreamTestHub: React.FC<StreamTestHubProps> = ({ streams, activeEnd
               enableWorker: true,
               lowLatencyMode: true,
             });
+            hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+              if (!active) return;
+              const p = video.play();
+              if (p !== undefined && typeof p.then === 'function') {
+                p.catch(e => console.log('Autoplay block on attach:', e));
+              }
+            });
+
             hls.loadSource(hlsUrl);
             hls.attachMedia(video);
             hlsInstanceRef.current = hls;
 
             hls.on(Hls.Events.MANIFEST_PARSED, () => {
               if (!active) return;
-              video.play().catch(e => console.log('Autoplay block:', e));
+              const p = video.play();
+              if (p !== undefined && typeof p.then === 'function') {
+                p.catch(e => console.log('Autoplay block on manifest:', e));
+              }
               const levels = hls.levels.map((l: any) => `${l.height}p`);
               setQualityLevels(['Auto', ...levels]);
             });
@@ -808,6 +819,7 @@ export const StreamTestHub: React.FC<StreamTestHubProps> = ({ streams, activeEnd
                         className="w-full h-full object-contain"
                         playsInline
                         autoPlay
+                        muted
                         controls={false}
                       />
 

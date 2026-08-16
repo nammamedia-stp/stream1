@@ -1158,19 +1158,27 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
   const safePlayVideo = async (video: HTMLVideoElement) => {
     if (!video) return;
     video.volume = volume / 100;
-    video.muted = volume === 0;
 
     try {
-      await video.play();
+      if (volume === 0) {
+        video.muted = true;
+      }
+      const playPromise = video.play();
+      if (playPromise !== undefined && typeof playPromise.then === 'function') {
+        await playPromise;
+      }
       console.log('[StreamPlayer Engine] Playback started/resumed successfully.');
     } catch (err: any) {
       console.warn('[StreamPlayer Engine] Unmuted play blocked by browser policy, attempting muted play fallback while preserving user volume state:', err);
       try {
         video.muted = true;
-        await video.play();
+        const fallbackPromise = video.play();
+        if (fallbackPromise !== undefined && typeof fallbackPromise.then === 'function') {
+          await fallbackPromise;
+        }
         console.log('[StreamPlayer Engine] Fallback muted playback started successfully.');
       } catch (mutedErr) {
-        console.error('[StreamPlayer Engine] Automatic playback start failed:', mutedErr);
+        console.warn('[StreamPlayer Engine] Automatic playback start rejected by browser policy (user gesture required):', mutedErr);
       }
     }
   };
@@ -1990,6 +1998,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
           className={`w-full h-full object-contain ${(stream.status === 'live' || isPlaying || isReconnectingUI) ? 'block' : 'hidden'}`}
           playsInline
           autoPlay
+          muted
           controls={false}
         />
 

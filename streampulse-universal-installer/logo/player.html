@@ -200,7 +200,7 @@
 <body class="cursor-hidden">
   <div id="player-container">
     <!-- 1. Live HLS Video Element -->
-    <video id="live-video" class="kiosk-video" playsinline muted preload="auto"></video>
+    <video id="live-video" class="kiosk-video" autoplay playsinline muted preload="auto"></video>
 
     <!-- 2. Permanent Offline Motion Logo Video Element -->
     <video id="motion-video" class="kiosk-video" autoplay loop muted playsinline preload="auto">
@@ -472,12 +472,23 @@
             fragLoadingTimeOut: 8000
           });
 
+          hlsInstance.on(window.Hls.Events.MEDIA_ATTACHED, function() {
+            console.log('[StreamPulse Player] Live media attached. Attempting autoplay...');
+            safePlay(liveVideo);
+          });
+
           hlsInstance.attachMedia(liveVideo);
           hlsInstance.loadSource(cacheBustUrl);
 
           hlsInstance.on(window.Hls.Events.MANIFEST_PARSED, function() {
             console.log('[StreamPulse Player] Live manifest parsed. Starting playback...');
             safePlay(liveVideo);
+          });
+
+          hlsInstance.on(window.Hls.Events.FRAG_BUFFERED, function() {
+            if (liveVideo.paused) {
+              safePlay(liveVideo);
+            }
           });
 
           hlsInstance.on(window.Hls.Events.ERROR, function(event, data) {

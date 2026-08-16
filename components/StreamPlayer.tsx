@@ -983,6 +983,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
   // Track active playback mode and controlled reconnect UI state
   const [isPlaying, setIsPlaying] = useState(true);
+  const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const [isReconnectingUI, setIsReconnectingUI] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
@@ -1494,8 +1495,6 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     const hls = new HlsClass(hlsConfig);
     hlsInstanceRef.current = hls;
 
-    let autoplayTriggered = false;
-
     // STEP 1: Register MEDIA_ATTACHED handler BEFORE calling attachMedia()
     hls.on(HlsClass.Events.MEDIA_ATTACHED, () => {
       if (sessionId !== playbackSessionIdRef.current) return;
@@ -1505,7 +1504,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       hls.loadSource(freshManifestUrl);
     });
 
-    // STEP 2: Handle MANIFEST_PARSED
+    // STEP 2: Handle MANIFEST_PARSED (parse levels and trigger safe autoplay once)
     hls.on(HlsClass.Events.MANIFEST_PARSED, (event: any, data: any) => {
       if (sessionId !== playbackSessionIdRef.current) return;
       hls.currentLevel = -1;
@@ -1524,37 +1523,15 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       const uniqueLevels = Array.from(new Set(levels));
       setQualityLevels(['Auto', ...uniqueLevels]);
 
-      if (video && video.paused) {
-        safePlayVideo(video);
-      }
+      // Safe autoplay attempt
+      safePlayVideo(video);
     });
 
-    hls.on(HlsClass.Events.LEVEL_LOADED, () => {
-      if (sessionId !== playbackSessionIdRef.current) return;
-      if (video && video.paused && stream.status === 'live' && !isPollingRef.current && video.readyState >= 2) {
-        safePlayVideo(video);
-      }
-    });
-
-    hls.on(HlsClass.Events.BUFFER_APPENDED, () => {
-      if (sessionId !== playbackSessionIdRef.current) return;
-      if (video && video.paused && stream.status === 'live' && !isPollingRef.current) {
-        safePlayVideo(video);
-      }
-    });
-
-    // STEP 3: Wait for first FRAG_BUFFERED before triggering autoplay
+    // STEP 3: Handle FRAG_BUFFERED (clear reconnect state)
     hls.on(HlsClass.Events.FRAG_BUFFERED, () => {
       if (sessionId !== playbackSessionIdRef.current) return;
-
       isPollingRef.current = false;
       setIsReconnectingUI(false);
-      console.log('[HLS_RECOVERY] playback resumed');
-
-      if (!autoplayTriggered || video.paused) {
-        autoplayTriggered = true;
-        safePlayVideo(video);
-      }
     });
 
     // STEP 4: Handle Errors
@@ -1607,13 +1584,6 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       }
     };
 
-    const handleVideoCanPlay = () => {
-      if (sessionId !== playbackSessionIdRef.current) return;
-      if (video.paused && stream.status === 'live' && autoplayTriggered) {
-        safePlayVideo(video);
-      }
-    };
-
     const handleVideoError = (e: any) => {
       if (sessionId !== playbackSessionIdRef.current) return;
       if (isPollingRef.current) return;
@@ -1624,14 +1594,13 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     const listeners = [
       { type: 'playing', fn: handleVideoPlaying },
       { type: 'timeupdate', fn: handleTimeUpdate },
-      { type: 'canplay', fn: handleVideoCanPlay },
       { type: 'error', fn: handleVideoError },
     ];
 
     videoListenersRef.current = listeners;
     listeners.forEach(({ type, fn }) => video.addEventListener(type, fn));
 
-    // Stall Watchdog Interval: Checks if currentTime is stuck for >4s while stream is live
+    // Stall Watchdog Interval: Checks if currentTime is stuck for >8s while stream is live and playing
     if (stallDetectorTimerRef.current) {
       clearInterval(stallDetectorTimerRef.current);
     }
@@ -1639,12 +1608,12 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       if (sessionId !== playbackSessionIdRef.current) return;
       if (stream.status === 'live' && !video.paused && !video.ended && !isPollingRef.current) {
         const stalledDuration = Date.now() - lastPlaybackTimeUpdateRef.current;
-        if (stalledDuration > 4000) {
+        if (stalledDuration > 8000) {
           console.log('[HLS_RECOVERY] detected playback stall');
           startReconnectEngine(HlsClass, 'playback_stall');
         }
       }
-    }, 1000);
+    }, 2000);
   };
 
   // Interactive Player Lifecycle effect (instantiates Hls.js or Dash.js on the <video> target)
@@ -1669,7 +1638,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
           const Hls = (window as any).Hls;
           if (Hls && Hls.isSupported()) {
-            startReconnectEngine(Hls, 'initial_mount');
+            createAndAttachHlsInstance(Hls, hlsUrl, currentSessionId);
           } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
             const cacheSep = hlsUrl.includes('?') ? '&' : '?';
             const cacheBustUrl = `${hlsUrl}${cacheSep}_t=${Date.now()}`;
@@ -1724,12 +1693,6 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       if (stream.status === 'live' && isPlaying) {
         if (!video) return;
 
-        // Auto-resume if stream is live but paused and not recovering/polling
-        if (video.paused && !isRecoveringRef.current && !isPollingRef.current) {
-          console.log('[Stream Watchdog] Stream live but player paused, auto-resuming...');
-          safePlayVideo(video);
-        }
-
         // Trigger reconnect if video errored during live stream
         if (video.error && !isRecoveringRef.current && !isPollingRef.current) {
           console.warn('[Stream Watchdog] Video element in error state during live stream, triggering reconnect...');
@@ -1760,7 +1723,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
           // Stream still offline
         }
       }
-    }, 1500);
+    }, 2000);
 
     return () => clearInterval(watchdogTimer);
   }, [isPlaying, stream.status, hlsUrl, onGoLive]);
@@ -1947,9 +1910,33 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     setRevealedPlaybacks(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const handleManualPlay = () => {
+    if (!isPlaying) {
+      setIsPlaying(true);
+      return;
+    }
+    const video = videoRef.current;
+    if (video) {
+      if (video.paused) {
+        video.muted = volume === 0;
+        video.volume = volume / 100;
+        const p = video.play();
+        if (p !== undefined && typeof p.then === 'function') {
+          p.catch((err) => {
+            console.warn('[StreamPlayer] Unmuted manual play failed, attempting muted fallback:', err);
+            video.muted = true;
+            video.play().catch(e => console.warn('[StreamPlayer] Manual play failed:', e));
+          });
+        }
+      } else {
+        video.pause();
+      }
+    }
+  };
+
   const handlePlayToggle = (e: React.MouseEvent) => {
     e.stopPropagation();
-    setIsPlaying(!isPlaying);
+    handleManualPlay();
   };
 
   const handleRegenClick = () => {
@@ -1991,7 +1978,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
   return (
     <div className={`bg-zinc-900 rounded-xl overflow-hidden border transition-all group shadow-xl flex flex-col h-full relative ${isMonitoring ? 'ring-2 ring-blue-500 border-blue-500/50' : 'border-zinc-800 hover:border-zinc-700'} ${stream.status === 'scheduled' ? 'opacity-90' : ''}`}>
       {/* Video Container */}
-      <div ref={playerContainerRef} className="relative aspect-video bg-black flex items-center justify-center overflow-hidden shrink-0">
+      <div ref={playerContainerRef} className="relative aspect-video bg-black flex items-center justify-center overflow-hidden shrink-0 group/player select-none">
         {/* Persistent Video Element so videoRef is retained for clean buffer flush on stream stop */}
         <video 
           ref={videoRef}
@@ -2000,15 +1987,19 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
           autoPlay
           muted
           controls={false}
+          onPlay={() => setIsVideoPlaying(true)}
+          onPlaying={() => setIsVideoPlaying(true)}
+          onPause={() => setIsVideoPlaying(false)}
+          onEnded={() => setIsVideoPlaying(false)}
         />
 
         {(stream.status === 'live' || isReconnectingUI) ? (
-          <div className="relative w-full h-full overflow-hidden">
+          <div className="absolute inset-0 overflow-hidden pointer-events-none">
             {isPlaying ? (
-              <div className="relative w-full h-full bg-black group/player select-none">
+              <div className="relative w-full h-full select-none">
                 {/* Reconnecting Overlay */}
                 {isReconnectingUI && (
-                  <div className="absolute inset-0 bg-black/85 backdrop-blur-[2px] flex flex-col items-center justify-center text-center p-4 z-40">
+                  <div className="absolute inset-0 bg-black/85 backdrop-blur-[2px] flex flex-col items-center justify-center text-center p-4 z-40 pointer-events-auto">
                     <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-semibold uppercase tracking-wider mb-3 shadow-lg shadow-amber-950/50">
                       <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
                       Reconnecting to Stream...
@@ -2019,7 +2010,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
                   </div>
                 )}
                 {/* Always-accessible top-right fullscreen button */}
-                <div className="absolute top-2 right-2 z-30 opacity-0 group-hover/player:opacity-100 transition-opacity duration-300">
+                <div className="absolute top-2 right-2 z-30 opacity-0 group-hover/player:opacity-100 transition-opacity duration-300 pointer-events-auto">
                   <button
                     type="button"
                     onClick={toggleFullscreen}
@@ -2071,11 +2062,12 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <button 
-                        onClick={() => setIsPlaying(false)}
+                        type="button"
+                        onClick={handleManualPlay}
                         className="p-1.5 bg-white/10 hover:bg-white/20 rounded-full text-white transition-all cursor-pointer"
-                        title="Stop playback"
+                        title={isVideoPlaying ? "Pause playback" : "Play live"}
                       >
-                        <Pause className="w-3.5 h-3.5 fill-white" />
+                        {isVideoPlaying ? <Pause className="w-3.5 h-3.5 fill-white" /> : <Play className="w-3.5 h-3.5 fill-white" />}
                       </button>
                       
                       <div className="flex items-center gap-1">
@@ -2121,7 +2113,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
                 </div>
               </div>
             ) : (
-              <div className="relative w-full h-full">
+              <div className="relative w-full h-full pointer-events-auto">
                 <img 
                   src={stream.thumbnailUrl} 
                   alt={stream.title} 
@@ -2129,7 +2121,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
                 />
                 <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
                   <button 
-                    onClick={() => setIsPlaying(true)}
+                    onClick={handleManualPlay}
                     className="p-3.5 sm:p-4 bg-blue-600 hover:bg-blue-500 rounded-full text-white shadow-2xl transition-all duration-300 hover:scale-110 active:scale-95 group/playbtn border border-blue-400/20 cursor-pointer"
                     title="Start Playback"
                   >
@@ -2737,17 +2729,22 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
         {/* Quick Stream Control Buttons (Start Playback / Fullscreen / Test Stream) */}
         <div className="grid grid-cols-3 gap-2 mt-2 pt-2 border-t border-zinc-800/50">
           <button 
-            onClick={() => setIsPlaying(!isPlaying)}
+            type="button"
+            onClick={handleManualPlay}
             disabled={stream.status !== 'live'}
             className={`px-2.5 py-1.5 rounded-lg text-[10px] sm:text-xs font-bold uppercase transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-              isPlaying 
-                ? 'bg-zinc-800 text-white' 
+              isVideoPlaying 
+                ? 'bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-700' 
                 : stream.status === 'live' 
                   ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg' 
                   : 'bg-zinc-900 text-zinc-600 cursor-not-allowed border border-zinc-850'
             }`}
           >
-            <PlayCircle className="w-3.5 h-3.5" /> {isPlaying ? 'Stop' : 'Play Live'}
+            {isVideoPlaying ? (
+              <><Pause className="w-3.5 h-3.5 fill-white" /> Pause</>
+            ) : (
+              <><PlayCircle className="w-3.5 h-3.5" /> Play Live</>
+            )}
           </button>
           <button 
             type="button"

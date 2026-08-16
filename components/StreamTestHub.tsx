@@ -448,13 +448,6 @@ export const StreamTestHub: React.FC<StreamTestHubProps> = ({ streams, activeEnd
               enableWorker: true,
               lowLatencyMode: true,
             });
-            hls.on(Hls.Events.MEDIA_ATTACHED, () => {
-              if (!active) return;
-              const p = video.play();
-              if (p !== undefined && typeof p.then === 'function') {
-                p.catch(e => console.log('Autoplay block on attach:', e));
-              }
-            });
 
             hls.loadSource(hlsUrl);
             hls.attachMedia(video);
@@ -462,9 +455,15 @@ export const StreamTestHub: React.FC<StreamTestHubProps> = ({ streams, activeEnd
 
             hls.on(Hls.Events.MANIFEST_PARSED, () => {
               if (!active) return;
+              video.muted = volume === 0;
+              video.volume = volume / 100;
               const p = video.play();
               if (p !== undefined && typeof p.then === 'function') {
-                p.catch(e => console.log('Autoplay block on manifest:', e));
+                p.catch(e => {
+                  console.log('[StreamTestHub] Unmuted autoplay blocked, attempting muted fallback:', e);
+                  video.muted = true;
+                  video.play().catch(err => console.log('[StreamTestHub] Autoplay prevented by browser policy:', err));
+                });
               }
               const levels = hls.levels.map((l: any) => `${l.height}p`);
               setQualityLevels(['Auto', ...levels]);
@@ -487,7 +486,12 @@ export const StreamTestHub: React.FC<StreamTestHubProps> = ({ streams, activeEnd
           } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
             video.src = hlsUrl;
             video.addEventListener('loadedmetadata', () => {
-              if (active) video.play().catch(e => console.log('Autoplay block:', e));
+              if (active) {
+                video.play().catch(e => {
+                  video.muted = true;
+                  video.play().catch(err => console.log('Autoplay block:', err));
+                });
+              }
             });
           }
         } catch (err) {

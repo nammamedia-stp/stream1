@@ -1168,30 +1168,29 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
     // Requirement 5: Verify Hls is attached and active
     if (!hlsInstanceRef.current && playerProtocol === 'hls') {
-      console.warn('[StreamPlayer Autoplay] Hls instance not active; aborting autoplay attempt.');
+      console.warn('[AUTOPLAY_DIAGNOSTICS] Hls instance not active; aborting autoplay attempt.');
       return;
     }
-
-    console.log(`[StreamPlayer Autoplay] Attempting guarded muted play (sessionId=${sessionId}, readyState=${video.readyState})...`);
 
     try {
       const playPromise = video.play();
       if (playPromise !== undefined && typeof playPromise.then === 'function') {
         playPromise
           .then(() => {
+            console.log('[AUTOPLAY_PLAY_RESOLVED] video.play() resolved successfully.');
             if (sessionId === playbackSessionIdRef.current) {
-              console.log(`[StreamPlayer Autoplay] Muted autoplay successfully started for session ${sessionId}.`);
               setIsVideoPlaying(true);
             }
           })
           .catch((err: any) => {
-            // Requirement 6 & 11: Log exact rejection name/message in development diagnostics
-            // DO NOT destroy Hls.js, DO NOT detach media, DO NOT reload source, DO NOT pause/reset video, DO NOT treat as fatal HLS error
-            console.warn(`[StreamPlayer Autoplay] Muted autoplay rejected by browser policy: ${err?.name || 'Error'} - ${err?.message || err}`);
+            // Diagnostic logging for rejection
+            console.warn(`[AUTOPLAY_PLAY_REJECTED] error.name: ${err?.name || 'Error'}, error.message: ${err?.message || err}`);
           });
+      } else {
+        console.log('[AUTOPLAY_PLAY_RESOLVED] video.play() returned synchronously.');
       }
     } catch (syncErr: any) {
-      console.warn(`[StreamPlayer Autoplay] Synchronous play invocation error: ${syncErr?.name || 'Error'} - ${syncErr?.message || syncErr}`);
+      console.warn(`[AUTOPLAY_PLAY_REJECTED] Synchronous exception: error.name: ${syncErr?.name || 'SyncError'}, error.message: ${syncErr?.message || syncErr}`);
     }
   };
 
@@ -1538,6 +1537,24 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       // ONE guarded safe muted autoplay attempt per player initialization
       if (!autoplayAttempted && sessionId === playbackSessionIdRef.current) {
         autoplayAttempted = true;
+
+        console.log('[AUTOPLAY_DIAGNOSTICS] === MANIFEST_PARSED STATE INSPECTION ===');
+        console.log('1. video.autoplay:', video.autoplay);
+        console.log('2. video.muted:', video.muted);
+        console.log('3. video.defaultMuted:', video.defaultMuted);
+        console.log('4. video.playsInline:', video.playsInline);
+        console.log('5. video.readyState:', video.readyState);
+        console.log('6. video.networkState:', video.networkState);
+        console.log('7. video.paused:', video.paused);
+        console.log('8. video.src:', video.src);
+        console.log('9. video.currentSrc:', video.currentSrc);
+        console.log('10. hls.media === video:', hls.media === video);
+        console.log('11. hls.media attached state:', !!hls.media);
+        console.log('12. document.visibilityState:', document.visibilityState);
+        console.log('13. document.hasFocus():', typeof document.hasFocus === 'function' ? document.hasFocus() : 'unknown');
+        console.log('14. document visibility / focus state:', { visibility: document.visibilityState, focused: typeof document.hasFocus === 'function' ? document.hasFocus() : false });
+        console.log('15. whether the autoplay attempt actually executes: true');
+
         attemptMutedAutoplay(video, sessionId);
       }
     });
@@ -1583,8 +1600,14 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     lastPlaybackTimeRef.current = video.currentTime;
     lastPlaybackTimeUpdateRef.current = Date.now();
 
+    const logVideoEvent = (eventName: string) => {
+      if (sessionId !== playbackSessionIdRef.current) return;
+      console.log(`[VIDEO_EVENT: ${eventName}] video.paused=${video.paused}, video.readyState=${video.readyState}, video.currentTime=${video.currentTime}`);
+    };
+
     const handleVideoPlaying = () => {
       if (sessionId !== playbackSessionIdRef.current) return;
+      logVideoEvent('playing');
       isPollingRef.current = false;
       setIsReconnectingUI(false);
       lastPlaybackTimeUpdateRef.current = Date.now();
@@ -1601,13 +1624,20 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
     const handleVideoError = (e: any) => {
       if (sessionId !== playbackSessionIdRef.current) return;
+      logVideoEvent('error');
       if (isPollingRef.current) return;
       console.log('[HLS_RECOVERY] detected video element error');
       startReconnectEngine(HlsClass, `video_${e?.type || 'error'}`);
     };
 
     const listeners = [
+      { type: 'play', fn: () => logVideoEvent('play') },
       { type: 'playing', fn: handleVideoPlaying },
+      { type: 'pause', fn: () => logVideoEvent('pause') },
+      { type: 'waiting', fn: () => logVideoEvent('waiting') },
+      { type: 'stalled', fn: () => logVideoEvent('stalled') },
+      { type: 'canplay', fn: () => logVideoEvent('canplay') },
+      { type: 'loadedmetadata', fn: () => logVideoEvent('loadedmetadata') },
       { type: 'timeupdate', fn: handleTimeUpdate },
       { type: 'error', fn: handleVideoError },
     ];

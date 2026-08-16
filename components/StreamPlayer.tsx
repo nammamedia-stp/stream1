@@ -1165,6 +1165,9 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     video.muted = true;
     video.autoplay = true;
     video.playsInline = true;
+    video.setAttribute('muted', '');
+    video.setAttribute('playsinline', '');
+    video.setAttribute('autoplay', '');
 
     // Requirement 5: Verify Hls is attached and active
     if (!hlsInstanceRef.current && playerProtocol === 'hls') {
@@ -1505,6 +1508,32 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     const hls = new HlsClass(hlsConfig);
     hlsInstanceRef.current = hls;
     let autoplayAttempted = false;
+    let manifestParsed = false;
+
+    // Single deterministic guarded autoplay trigger once media is attached, manifest is parsed, and media is ready
+    const triggerGuardedAutoplay = (triggerSource: string) => {
+      if (autoplayAttempted || !manifestParsed || sessionId !== playbackSessionIdRef.current) return;
+      autoplayAttempted = true;
+
+      console.log(`[AUTOPLAY_DIAGNOSTICS] === MEDIA READINESS AUTOPLAY TRIGGER (${triggerSource}) ===`);
+      console.log('1. video.autoplay:', video.autoplay);
+      console.log('2. video.muted:', video.muted);
+      console.log('3. video.defaultMuted:', video.defaultMuted);
+      console.log('4. video.playsInline:', video.playsInline);
+      console.log('5. video.readyState:', video.readyState);
+      console.log('6. video.networkState:', video.networkState);
+      console.log('7. video.paused:', video.paused);
+      console.log('8. video.src:', video.src);
+      console.log('9. video.currentSrc:', video.currentSrc);
+      console.log('10. hls.media === video:', hls.media === video);
+      console.log('11. hls.media attached state:', !!hls.media);
+      console.log('12. document.visibilityState:', document.visibilityState);
+      console.log('13. document.hasFocus():', typeof document.hasFocus === 'function' ? document.hasFocus() : 'unknown');
+      console.log('14. document visibility / focus state:', { visibility: document.visibilityState, focused: typeof document.hasFocus === 'function' ? document.hasFocus() : false });
+      console.log('15. whether the autoplay attempt actually executes: true');
+
+      attemptMutedAutoplay(video, sessionId);
+    };
 
     // STEP 1: Register MEDIA_ATTACHED handler BEFORE calling attachMedia()
     hls.on(HlsClass.Events.MEDIA_ATTACHED, () => {
@@ -1515,9 +1544,10 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       hls.loadSource(freshManifestUrl);
     });
 
-    // STEP 2: Handle MANIFEST_PARSED (parse levels and trigger ONE guarded safe muted autoplay attempt)
+    // STEP 2: Handle MANIFEST_PARSED (parse levels and check for immediate readiness)
     hls.on(HlsClass.Events.MANIFEST_PARSED, (event: any, data: any) => {
       if (sessionId !== playbackSessionIdRef.current) return;
+      manifestParsed = true;
       hls.currentLevel = -1;
 
       if (isMobile && data.levels && data.levels.length > 1) {
@@ -1534,36 +1564,21 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       const uniqueLevels = Array.from(new Set(levels));
       setQualityLevels(['Auto', ...uniqueLevels]);
 
-      // ONE guarded safe muted autoplay attempt per player initialization
-      if (!autoplayAttempted && sessionId === playbackSessionIdRef.current) {
-        autoplayAttempted = true;
-
-        console.log('[AUTOPLAY_DIAGNOSTICS] === MANIFEST_PARSED STATE INSPECTION ===');
-        console.log('1. video.autoplay:', video.autoplay);
-        console.log('2. video.muted:', video.muted);
-        console.log('3. video.defaultMuted:', video.defaultMuted);
-        console.log('4. video.playsInline:', video.playsInline);
-        console.log('5. video.readyState:', video.readyState);
-        console.log('6. video.networkState:', video.networkState);
-        console.log('7. video.paused:', video.paused);
-        console.log('8. video.src:', video.src);
-        console.log('9. video.currentSrc:', video.currentSrc);
-        console.log('10. hls.media === video:', hls.media === video);
-        console.log('11. hls.media attached state:', !!hls.media);
-        console.log('12. document.visibilityState:', document.visibilityState);
-        console.log('13. document.hasFocus():', typeof document.hasFocus === 'function' ? document.hasFocus() : 'unknown');
-        console.log('14. document visibility / focus state:', { visibility: document.visibilityState, focused: typeof document.hasFocus === 'function' ? document.hasFocus() : false });
-        console.log('15. whether the autoplay attempt actually executes: true');
-
-        attemptMutedAutoplay(video, sessionId);
+      // If video element already has usable media readiness, trigger the single guarded autoplay
+      if (video.readyState >= 2 && !autoplayAttempted) {
+        triggerGuardedAutoplay('MANIFEST_PARSED_READY');
       }
     });
 
-    // STEP 3: Handle FRAG_BUFFERED (clear reconnect state)
+    // STEP 3: Handle FRAG_BUFFERED (clear reconnect state & trigger single guarded autoplay when first fragment is buffered)
     hls.on(HlsClass.Events.FRAG_BUFFERED, () => {
       if (sessionId !== playbackSessionIdRef.current) return;
       isPollingRef.current = false;
       setIsReconnectingUI(false);
+
+      if (manifestParsed && !autoplayAttempted) {
+        triggerGuardedAutoplay('FRAG_BUFFERED');
+      }
     });
 
     // STEP 4: Handle Errors
@@ -1630,13 +1645,30 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       startReconnectEngine(HlsClass, `video_${e?.type || 'error'}`);
     };
 
+    const handleCanPlay = () => {
+      if (sessionId !== playbackSessionIdRef.current) return;
+      logVideoEvent('canplay');
+      if (manifestParsed && !autoplayAttempted) {
+        triggerGuardedAutoplay('VIDEO_CANPLAY');
+      }
+    };
+
+    const handleLoadedData = () => {
+      if (sessionId !== playbackSessionIdRef.current) return;
+      logVideoEvent('loadeddata');
+      if (manifestParsed && !autoplayAttempted) {
+        triggerGuardedAutoplay('VIDEO_LOADEDDATA');
+      }
+    };
+
     const listeners = [
       { type: 'play', fn: () => logVideoEvent('play') },
       { type: 'playing', fn: handleVideoPlaying },
       { type: 'pause', fn: () => logVideoEvent('pause') },
       { type: 'waiting', fn: () => logVideoEvent('waiting') },
       { type: 'stalled', fn: () => logVideoEvent('stalled') },
-      { type: 'canplay', fn: () => logVideoEvent('canplay') },
+      { type: 'canplay', fn: handleCanPlay },
+      { type: 'loadeddata', fn: handleLoadedData },
       { type: 'loadedmetadata', fn: () => logVideoEvent('loadedmetadata') },
       { type: 'timeupdate', fn: handleTimeUpdate },
       { type: 'error', fn: handleVideoError },

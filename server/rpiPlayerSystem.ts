@@ -925,7 +925,7 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
 <body class="cursor-hidden">
   <div id="player-container">
     <!-- Live HLS Video Element -->
-    <video id="live-video" class="kiosk-video" playsinline muted preload="auto"></video>
+    <video id="live-video" class="kiosk-video" autoplay playsinline muted preload="auto"></video>
 
     <!-- Offline Permanent Motion Logo Video Element -->
     <video id="motion-video" class="kiosk-video" autoplay loop muted playsinline preload="auto">

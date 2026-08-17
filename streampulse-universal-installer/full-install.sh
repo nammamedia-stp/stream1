@@ -628,7 +628,7 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
 </head>
 <body class="cursor-hidden">
   <div id="player-container">
-    <video id="live-video" class="kiosk-video" playsinline muted preload="auto"></video>
+    <video id="live-video" class="kiosk-video" autoplay playsinline muted preload="auto"></video>
     <video id="motion-video" class="kiosk-video" autoplay loop muted playsinline preload="auto">
       <source src="motion-logo.mp4" type="video/mp4">
       <source src="/opt/streampulse/logo/motion-logo.mp4" type="video/mp4">

@@ -1270,6 +1270,303 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
 </body>
 </html>`;
   }
+
+  /**
+   * Render a dedicated standalone HTML5 HLS Direct Player page.
+   * Provides 100% reliable muted autoplay in Chrome/Safari/Firefox
+   * with seamless 1-click unmuting and MSE / hls.js acceleration.
+   */
+  public renderDirectPlayerHtml(streamKey: string, protoHost: string): string {
+    const cleanHost = protoHost.replace(/^https?:\/\//, '');
+    const isHttps = protoHost.startsWith('https');
+    const proto = isHttps ? 'https' : 'http';
+    const hlsUrl = `${proto}://${cleanHost}/hls/${encodeURIComponent(streamKey)}/master.m3u8`;
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StreamPulse Live - ${streamKey}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body, html {
+      width: 100%;
+      height: 100%;
+      background-color: #090d16;
+      color: #f1f5f9;
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      height: 56px;
+      padding: 0 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(15, 23, 42, 0.75);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      z-index: 20;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 16px;
+      letter-spacing: -0.01em;
+    }
+    .brand-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #6366f1 0%, #06b6d4 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35);
+    }
+    .stream-meta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .live-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #f87171;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .live-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background-color: #ef4444;
+      box-shadow: 0 0 8px #ef4444;
+      animation: pulse 1.4s infinite;
+    }
+    .key-badge {
+      font-family: monospace;
+      font-size: 12px;
+      color: #94a3b8;
+      background: rgba(255, 255, 255, 0.06);
+      padding: 4px 10px;
+      border-radius: 6px;
+    }
+    main {
+      flex: 1;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #000;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+    }
+    #unmute-banner {
+      position: absolute;
+      bottom: 72px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.9);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 9999px;
+      font-size: 13px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+      transition: all 0.2s ease;
+      z-index: 30;
+      user-select: none;
+    }
+    #unmute-banner:hover {
+      background: rgba(30, 41, 59, 0.95);
+      transform: translateX(-50%) scale(1.04);
+      border-color: rgba(99, 102, 241, 0.5);
+    }
+    #status-toast {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 6px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      color: #cbd5e1;
+      display: none;
+      z-index: 25;
+      pointer-events: none;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="brand-icon">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="5 3 19 12 5 21 5 3"></polygon>
+        </svg>
+      </div>
+      <span>StreamPulse Direct</span>
+    </div>
+    <div class="stream-meta">
+      <div class="key-badge">${streamKey}</div>
+      <div class="live-badge">
+        <span class="live-dot"></span>
+        <span>Live</span>
+      </div>
+    </div>
+  </header>
+
+  <main id="player-wrapper">
+    <video id="video-element" autoplay playsinline muted preload="auto" controls></video>
+    
+    <div id="unmute-banner">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+        <line x1="23" y1="9" x2="17" y2="15"></line>
+        <line x1="17" y1="9" x2="23" y2="15"></line>
+      </svg>
+      <span>Click to Unmute Stream</span>
+    </div>
+
+    <div id="status-toast">Connecting...</div>
+  </main>
+
+  <script>
+    (function() {
+      const HLS_MANIFEST_URL = "${hlsUrl}";
+      const video = document.getElementById('video-element');
+      const unmuteBanner = document.getElementById('unmute-banner');
+      const statusToast = document.getElementById('status-toast');
+
+      function showStatus(msg) {
+        if (!statusToast) return;
+        statusToast.textContent = msg;
+        statusToast.style.display = 'block';
+        setTimeout(() => { statusToast.style.display = 'none'; }, 4000);
+      }
+
+      function updateUnmuteVisibility() {
+        if (!unmuteBanner) return;
+        if (video.muted || video.volume === 0) {
+          unmuteBanner.style.display = 'flex';
+        } else {
+          unmuteBanner.style.display = 'none';
+        }
+      }
+
+      function performUnmute() {
+        video.muted = false;
+        video.volume = 1.0;
+        updateUnmuteVisibility();
+      }
+
+      unmuteBanner.addEventListener('click', performUnmute);
+      video.addEventListener('volumechange', updateUnmuteVisibility);
+      video.addEventListener('play', updateUnmuteVisibility);
+
+      // Initialize Video & HLS
+      video.muted = true;
+      video.defaultMuted = true;
+
+      if (window.Hls && Hls.isSupported()) {
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 30,
+          manifestLoadingTimeOut: 10000,
+          manifestLoadingMaxRetry: 6,
+          levelLoadingTimeOut: 10000,
+          levelLoadingMaxRetry: 6,
+          fragLoadingTimeOut: 15000,
+          fragLoadingMaxRetry: 8
+        });
+
+        hls.attachMedia(video);
+
+        hls.on(Hls.Events.MEDIA_ATTACHED, function() {
+          hls.loadSource(HLS_MANIFEST_URL);
+        });
+
+        hls.on(Hls.Events.MANIFEST_PARSED, function() {
+          video.play().catch(function(e) {
+            console.warn('[DirectPlayer] Autoplay prevented:', e);
+          });
+        });
+
+        hls.on(Hls.Events.ERROR, function(event, data) {
+          if (data.fatal) {
+            switch(data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                showStatus('Reconnecting to stream...');
+                hls.startLoad();
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                showStatus('Recovering media...');
+                hls.recoverMediaError();
+                break;
+              default:
+                hls.destroy();
+                setTimeout(() => {
+                  window.location.reload();
+                }, 3000);
+                break;
+            }
+          }
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = HLS_MANIFEST_URL;
+        video.addEventListener('loadedmetadata', function() {
+          video.play().catch(function(e) {
+            console.warn('[DirectPlayer] Native autoplay prevented:', e);
+          });
+        });
+      }
+
+      // Initial autoplay trigger
+      video.play().catch(function() {});
+    })();
+  </script>
+</body>
+</html>`;
+  }
 }
 
 export const rpiPlayerSystem = new RpiPlayerSystem();
+

@@ -4501,8 +4501,23 @@ async function startServer() {
   });
 
   // ----------------------------------------------------
-  // RASPBERRY PI STREAMING PLAYER ENDPOINTS
+  // RASPBERRY PI STREAMING PLAYER & DIRECT HLS PLAYER ENDPOINTS
   // ----------------------------------------------------
+
+  // Dedicated Standalone Direct HTML5 Player (100% reliable Chrome/Safari muted autoplay + 1-click unmute)
+  app.get(['/player/:streamKey', '/player', '/watch/:streamKey', '/watch', '/live/:streamKey', '/play/:streamKey'], async (req: any, res: any) => {
+    try {
+      const streamKey = String(req.params.streamKey || req.query.streamKey || rpiPlayerSystem.getConfig().defaultStreamKey || 'live_stream');
+      const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
+      const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.protocol === 'https' || req.secure;
+      const protoHost = `${isHttps ? 'https' : 'http'}://${host}`;
+      const html = rpiPlayerSystem.renderDirectPlayerHtml(streamKey, protoHost);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.send(html);
+    } catch (err: any) {
+      res.status(500).send('Error rendering Direct Stream Player: ' + err.message);
+    }
+  });
 
   // Standalone Fullscreen Kiosk Player UI
   app.get('/rpi-kiosk', async (req: any, res: any) => {

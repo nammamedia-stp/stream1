@@ -981,11 +981,66 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
   const hlsInstanceRef = useRef<any>(null);
   const dashPlayerRef = useRef<any>(null);
 
+  // Video Element Unique Identity & Diagnostics Tracker
+  const nextVideoElementIdRef = useRef<number>(1);
+  const currentVideoElementIdRef = useRef<number | null>(null);
+
+  const getVideoElementId = (video: HTMLVideoElement | null): string => {
+    if (!video) return 'VIDEO_ELEMENT_ID=NULL';
+    let id = (video as any).__streamPlayerVidId;
+    if (!id) {
+      id = nextVideoElementIdRef.current++;
+      (video as any).__streamPlayerVidId = id;
+    }
+    return `VIDEO_ELEMENT_ID=${id}`;
+  };
+
+  const getTimelineLogPayload = (tag: string, video: HTMLVideoElement | null, extra?: any) => {
+    const t = performance.now().toFixed(2);
+    const vidId = getVideoElementId(video);
+    const readyState = video ? video.readyState : 'N/A';
+    const paused = video ? video.paused : 'N/A';
+    const currentTime = video ? video.currentTime : 'N/A';
+    const hlsAttached = hlsInstanceRef.current ? hlsInstanceRef.current.media === video : false;
+    return `[${tag}] [t=${t}ms] [${vidId}] readyState=${readyState} paused=${paused} currentTime=${currentTime} hls.media===video=${hlsAttached}${extra ? ' ' + (typeof extra === 'object' ? JSON.stringify(extra) : extra) : ''}`;
+  };
+
+  // Callback ref for <video> to track element changes/replacements instantly
+  const setVideoRef = (video: HTMLVideoElement | null) => {
+    if (video) {
+      const vidId = (video as any).__streamPlayerVidId || nextVideoElementIdRef.current++;
+      (video as any).__streamPlayerVidId = vidId;
+
+      if (currentVideoElementIdRef.current !== null && currentVideoElementIdRef.current !== vidId) {
+        console.warn(`[VIDEO_ELEMENT_REPLACED] Old VIDEO_ELEMENT_ID=${currentVideoElementIdRef.current} -> New VIDEO_ELEMENT_ID=${vidId} at t=${performance.now().toFixed(2)}ms`);
+      }
+      currentVideoElementIdRef.current = vidId;
+      console.log(getTimelineLogPayload('T2 video element available', video));
+      console.log(getTimelineLogPayload('T3 initial video properties', video, {
+        autoplay: video.autoplay,
+        muted: video.muted,
+        defaultMuted: video.defaultMuted,
+        playsInline: video.playsInline,
+        readyState: video.readyState,
+        paused: video.paused
+      }));
+    }
+    videoRef.current = video;
+  };
+
   // Track active playback mode and controlled reconnect UI state
   const [isPlaying, setIsPlaying] = useState(true);
   const [isVideoPlaying, setIsVideoPlaying] = useState(false);
   const [isReconnectingUI, setIsReconnectingUI] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // T1 React component mounted
+  useEffect(() => {
+    console.log(`[T1 React component mounted] [t=${performance.now().toFixed(2)}ms] Stream="${stream.title}" status="${stream.status}"`);
+    return () => {
+      console.log(`[PLAYER_CLEANUP] React component unmounting at t=${performance.now().toFixed(2)}ms (stream: "${stream.title}")`);
+    };
+  }, []);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -1156,97 +1211,115 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
   const videoListenersRef = useRef<Array<{ type: string; fn: any }>>([]);
   const isUserUnmutedRef = useRef<boolean>(false);
 
-  // Helper to execute ONE safe, guarded muted autoplay attempt per initialization
-  const attemptMutedAutoplay = (video: HTMLVideoElement, sessionId: number) => {
-    if (!video || sessionId !== playbackSessionIdRef.current) return;
+    // Helper to log video property mutations with element identity and timestamp
+    const logVideoPropChange = (video: HTMLVideoElement, propName: string, val: any) => {
+      console.log(getTimelineLogPayload(`VIDEO_PROP_SET: video.${propName}=${val}`, video));
+    };
 
-    // Requirement 1 & 5: Ensure muted, autoplay, playsInline
-    video.defaultMuted = true;
-    video.muted = true;
-    video.autoplay = true;
-    video.playsInline = true;
-    video.setAttribute('muted', '');
-    video.setAttribute('playsinline', '');
-    video.setAttribute('autoplay', '');
+    // Helper to execute ONE safe, guarded muted autoplay attempt per initialization
+    const attemptMutedAutoplay = (video: HTMLVideoElement, sessionId: number) => {
+      if (!video || sessionId !== playbackSessionIdRef.current) return;
 
-    // Requirement 5: Verify Hls is attached and active
-    if (!hlsInstanceRef.current && playerProtocol === 'hls') {
-      console.warn('[AUTOPLAY_DIAGNOSTICS] Hls instance not active; aborting autoplay attempt.');
-      return;
-    }
+      // Requirement 1 & 5: Ensure muted, autoplay, playsInline
+      video.defaultMuted = true;
+      logVideoPropChange(video, 'defaultMuted', true);
+      video.muted = true;
+      logVideoPropChange(video, 'muted', true);
+      video.autoplay = true;
+      logVideoPropChange(video, 'autoplay', true);
+      video.playsInline = true;
+      logVideoPropChange(video, 'playsInline', true);
+      video.setAttribute('muted', '');
+      video.setAttribute('playsinline', '');
+      video.setAttribute('autoplay', '');
 
-    try {
-      const playPromise = video.play();
-      if (playPromise !== undefined && typeof playPromise.then === 'function') {
-        playPromise
-          .then(() => {
-            console.log('[AUTOPLAY_PLAY_RESOLVED] video.play() resolved successfully.');
-            if (sessionId === playbackSessionIdRef.current) {
-              setIsVideoPlaying(true);
-            }
-          })
-          .catch((err: any) => {
-            // Diagnostic logging for rejection
-            console.warn(`[AUTOPLAY_PLAY_REJECTED] error.name: ${err?.name || 'Error'}, error.message: ${err?.message || err}`);
-          });
-      } else {
-        console.log('[AUTOPLAY_PLAY_RESOLVED] video.play() returned synchronously.');
+      console.log(getTimelineLogPayload('T13 existing autoplay play() attempt', video));
+
+      // Requirement 5: Verify Hls is attached and active
+      if (!hlsInstanceRef.current && playerProtocol === 'hls') {
+        console.warn('[AUTOPLAY_DIAGNOSTICS] Hls instance not active; aborting autoplay attempt.');
+        return;
       }
-    } catch (syncErr: any) {
-      console.warn(`[AUTOPLAY_PLAY_REJECTED] Synchronous exception: error.name: ${syncErr?.name || 'SyncError'}, error.message: ${syncErr?.message || syncErr}`);
-    }
-  };
 
-  // Helper to reset HTMLVideoElement state cleanly before re-attaching media
-  const resetVideoElement = (video: HTMLVideoElement) => {
-    try {
-      video.pause();
-      video.currentTime = 0;
-      video.removeAttribute('src');
-      if (video.srcObject) {
-        video.srcObject = null;
-      }
-      video.load();
-    } catch (e) {
-      console.warn('[StreamPlayer Engine] Video reset notice:', e);
-    }
-  };
-
-  // Fully clean up and destroy any active HLS or DASH instances, timers, and event listeners
-  const cleanupAndResetPlayer = (reason: string = 'unspecified') => {
-    playbackSessionIdRef.current += 1;
-    const currentSessionId = playbackSessionIdRef.current;
-    console.log(`[StreamPlayer Engine] Destroying player (reason: ${reason}, sessionId: ${currentSessionId})`);
-
-    if (reconnectTimerRef.current) {
-      clearInterval(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
-    }
-
-    if (stallDetectorTimerRef.current) {
-      clearInterval(stallDetectorTimerRef.current);
-      stallDetectorTimerRef.current = null;
-    }
-
-    const video = videoRef.current;
-    if (video && videoListenersRef.current.length > 0) {
-      videoListenersRef.current.forEach(({ type, fn }) => {
-        try {
-          video.removeEventListener(type, fn);
-        } catch (_) {}
-      });
-      videoListenersRef.current = [];
-    }
-
-    if (hlsInstanceRef.current) {
       try {
-        const hls = hlsInstanceRef.current;
-        hls.stopLoad();
-        hls.detachMedia();
-        hls.destroy();
-      } catch (_) {}
-      hlsInstanceRef.current = null;
-    }
+        const playPromise = video.play();
+        if (playPromise !== undefined && typeof playPromise.then === 'function') {
+          playPromise
+            .then(() => {
+              console.log(getTimelineLogPayload('T14 play() RESOLVED', video));
+              if (sessionId === playbackSessionIdRef.current) {
+                setIsVideoPlaying(true);
+              }
+            })
+            .catch((err: any) => {
+              console.warn(getTimelineLogPayload('T14 play() REJECTED', video, { errorName: err?.name, errorMessage: err?.message || err }));
+            });
+        } else {
+          console.log(getTimelineLogPayload('T14 play() RESOLVED (sync)', video));
+        }
+      } catch (syncErr: any) {
+        console.warn(getTimelineLogPayload('T14 play() REJECTED (sync exception)', video, { errorName: syncErr?.name, errorMessage: syncErr?.message || syncErr }));
+      }
+    };
+
+    // Helper to reset HTMLVideoElement state cleanly before re-attaching media
+    const resetVideoElement = (video: HTMLVideoElement) => {
+      try {
+        console.log(getTimelineLogPayload('CALL: video.pause()', video));
+        video.pause();
+        console.log(getTimelineLogPayload('CALL: video.currentTime = 0', video));
+        video.currentTime = 0;
+        console.log(getTimelineLogPayload('CALL: video.removeAttribute("src")', video));
+        video.removeAttribute('src');
+        if (video.srcObject) {
+          console.log(getTimelineLogPayload('CALL: video.srcObject = null', video));
+          video.srcObject = null;
+        }
+        console.log(getTimelineLogPayload('CALL: video.load()', video));
+        video.load();
+      } catch (e) {
+        console.warn('[StreamPlayer Engine] Video reset notice:', e);
+      }
+    };
+
+    // Fully clean up and destroy any active HLS or DASH instances, timers, and event listeners
+    const cleanupAndResetPlayer = (reason: string = 'unspecified') => {
+      playbackSessionIdRef.current += 1;
+      const currentSessionId = playbackSessionIdRef.current;
+      const video = videoRef.current;
+      console.log(`[PLAYER_CLEANUP] Destroying player (reason: ${reason}, sessionId: ${currentSessionId}, at t=${performance.now().toFixed(2)}ms) [${getVideoElementId(video)}]`);
+
+      if (reconnectTimerRef.current) {
+        clearInterval(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+
+      if (stallDetectorTimerRef.current) {
+        clearInterval(stallDetectorTimerRef.current);
+        stallDetectorTimerRef.current = null;
+      }
+
+      if (video && videoListenersRef.current.length > 0) {
+        videoListenersRef.current.forEach(({ type, fn }) => {
+          try {
+            video.removeEventListener(type, fn);
+          } catch (_) {}
+        });
+        videoListenersRef.current = [];
+      }
+
+      if (hlsInstanceRef.current) {
+        try {
+          const hls = hlsInstanceRef.current;
+          console.log(getTimelineLogPayload('CALL: hls.stopLoad()', video));
+          hls.stopLoad();
+          console.log(getTimelineLogPayload('CALL: hls.detachMedia()', video));
+          hls.detachMedia();
+          console.log(getTimelineLogPayload('CALL: hls.destroy()', video));
+          hls.destroy();
+        } catch (_) {}
+        hlsInstanceRef.current = null;
+      }
 
     if (dashPlayerRef.current) {
       try {
@@ -1441,9 +1514,13 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
     if (hlsInstanceRef.current) {
       try {
-        hlsInstanceRef.current.stopLoad();
-        hlsInstanceRef.current.detachMedia();
-        hlsInstanceRef.current.destroy();
+        const prevHls = hlsInstanceRef.current;
+        console.log(getTimelineLogPayload('CALL: hls.stopLoad()', video));
+        prevHls.stopLoad();
+        console.log(getTimelineLogPayload('CALL: hls.detachMedia()', video));
+        prevHls.detachMedia();
+        console.log(getTimelineLogPayload('CALL: hls.destroy()', video));
+        prevHls.destroy();
       } catch (_) {}
       hlsInstanceRef.current = null;
     }
@@ -1507,6 +1584,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
     const hls = new HlsClass(hlsConfig);
     hlsInstanceRef.current = hls;
+    console.log(getTimelineLogPayload('T4 Hls instance created', video));
     let autoplayAttempted = false;
     let manifestParsed = false;
 
@@ -1538,15 +1616,18 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     // STEP 1: Register MEDIA_ATTACHED handler BEFORE calling attachMedia()
     hls.on(HlsClass.Events.MEDIA_ATTACHED, () => {
       if (sessionId !== playbackSessionIdRef.current) return;
+      console.log(getTimelineLogPayload('T7 MEDIA_ATTACHED', video));
       const masterSep = baseUrl.includes('?') ? '&' : '?';
       const freshManifestUrl = `${baseUrl}${masterSep}_t=${Date.now()}`;
-      console.log(`[StreamPlayer Engine] MEDIA_ATTACHED confirmed. Loading source: ${freshManifestUrl}`);
+      console.log(getTimelineLogPayload('T6 loadSource called', video, { url: freshManifestUrl }));
+      console.log(getTimelineLogPayload('CALL: hls.loadSource(url)', video, { url: freshManifestUrl }));
       hls.loadSource(freshManifestUrl);
     });
 
     // STEP 2: Handle MANIFEST_PARSED (parse levels and check for immediate readiness)
     hls.on(HlsClass.Events.MANIFEST_PARSED, (event: any, data: any) => {
       if (sessionId !== playbackSessionIdRef.current) return;
+      console.log(getTimelineLogPayload('T8 MANIFEST_PARSED', video, { levelCount: data?.levels?.length }));
       manifestParsed = true;
       hls.currentLevel = -1;
 
@@ -1571,8 +1652,9 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     });
 
     // STEP 3: Handle FRAG_BUFFERED (clear reconnect state & trigger single guarded autoplay when first fragment is buffered)
-    hls.on(HlsClass.Events.FRAG_BUFFERED, () => {
+    hls.on(HlsClass.Events.FRAG_BUFFERED, (event: any, data: any) => {
       if (sessionId !== playbackSessionIdRef.current) return;
+      console.log(getTimelineLogPayload('T9 FRAG_BUFFERED', video, { fragSn: data?.frag?.sn }));
       isPollingRef.current = false;
       setIsReconnectingUI(false);
 
@@ -1609,6 +1691,8 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
     });
 
     // STEP 5: Attach Media to Video Element AFTER listeners are registered
+    console.log(getTimelineLogPayload('T5 attachMedia called', video));
+    console.log(getTimelineLogPayload('CALL: hls.attachMedia(video)', video));
     hls.attachMedia(video);
 
     // Video Event Listeners & Stall Detector
@@ -1622,6 +1706,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
     const handleVideoPlaying = () => {
       if (sessionId !== playbackSessionIdRef.current) return;
+      console.log(getTimelineLogPayload('T16 playing event', video));
       logVideoEvent('playing');
       isPollingRef.current = false;
       setIsReconnectingUI(false);
@@ -1647,6 +1732,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
     const handleCanPlay = () => {
       if (sessionId !== playbackSessionIdRef.current) return;
+      console.log(getTimelineLogPayload('T12 canplay', video));
       logVideoEvent('canplay');
       if (manifestParsed && !autoplayAttempted) {
         triggerGuardedAutoplay('VIDEO_CANPLAY');
@@ -1655,21 +1741,40 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
     const handleLoadedData = () => {
       if (sessionId !== playbackSessionIdRef.current) return;
+      console.log(getTimelineLogPayload('T11 loadeddata', video));
       logVideoEvent('loadeddata');
       if (manifestParsed && !autoplayAttempted) {
         triggerGuardedAutoplay('VIDEO_LOADEDDATA');
       }
     };
 
+    const handleLoadedMetadata = () => {
+      if (sessionId !== playbackSessionIdRef.current) return;
+      console.log(getTimelineLogPayload('T10 loadedmetadata', video));
+      logVideoEvent('loadedmetadata');
+    };
+
+    const handlePlayEvent = () => {
+      if (sessionId !== playbackSessionIdRef.current) return;
+      console.log(getTimelineLogPayload('T15 play event', video));
+      logVideoEvent('play');
+    };
+
+    const handlePauseEvent = () => {
+      if (sessionId !== playbackSessionIdRef.current) return;
+      console.log(getTimelineLogPayload('T17 pause event', video));
+      logVideoEvent('pause');
+    };
+
     const listeners = [
-      { type: 'play', fn: () => logVideoEvent('play') },
+      { type: 'play', fn: handlePlayEvent },
       { type: 'playing', fn: handleVideoPlaying },
-      { type: 'pause', fn: () => logVideoEvent('pause') },
+      { type: 'pause', fn: handlePauseEvent },
       { type: 'waiting', fn: () => logVideoEvent('waiting') },
       { type: 'stalled', fn: () => logVideoEvent('stalled') },
       { type: 'canplay', fn: handleCanPlay },
       { type: 'loadeddata', fn: handleLoadedData },
-      { type: 'loadedmetadata', fn: () => logVideoEvent('loadedmetadata') },
+      { type: 'loadedmetadata', fn: handleLoadedMetadata },
       { type: 'timeupdate', fn: handleTimeUpdate },
       { type: 'error', fn: handleVideoError },
     ];
@@ -1707,9 +1812,13 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
 
       // Requirement 1 & 5: Ensure muted, autoplay, playsInline on HTMLVideoElement
       video.defaultMuted = true;
+      logVideoPropChange(video, 'defaultMuted', true);
       video.muted = true;
+      logVideoPropChange(video, 'muted', true);
       video.autoplay = true;
+      logVideoPropChange(video, 'autoplay', true);
       video.playsInline = true;
+      logVideoPropChange(video, 'playsInline', true);
 
       if (playerProtocol === 'hls') {
         try {
@@ -1722,6 +1831,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
           } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
             const cacheSep = hlsUrl.includes('?') ? '&' : '?';
             const cacheBustUrl = `${hlsUrl}${cacheSep}_t=${Date.now()}`;
+            logVideoPropChange(video, 'src', cacheBustUrl);
             video.src = cacheBustUrl;
             video.addEventListener('loadedmetadata', () => {
               if (currentSessionId === playbackSessionIdRef.current) attemptMutedAutoplay(video, currentSessionId);
@@ -2072,7 +2182,7 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
       <div ref={playerContainerRef} className="relative aspect-video bg-black flex items-center justify-center overflow-hidden shrink-0 group/player select-none">
         {/* Persistent Video Element so videoRef is retained for clean buffer flush on stream stop */}
         <video 
-          ref={videoRef}
+          ref={setVideoRef}
           className={`w-full h-full object-contain ${(stream.status === 'live' || isPlaying || isReconnectingUI) ? 'block' : 'hidden'}`}
           playsInline
           autoPlay

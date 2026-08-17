@@ -42,10 +42,8 @@ if [[ -d "${RESTORE_DIR}/autostart/autostart" ]] && [[ -d "${USER_HOME}/.config/
   cp -p "${RESTORE_DIR}/autostart/autostart" "${USER_HOME}/.config/labwc/autostart" 2>/dev/null || true
 fi
 
-for srv in streampulse-player.service streampulse-dashboard.service; do
-  if systemctl is-enabled --quiet "${srv}" 2>/dev/null; then
-    systemctl restart "${srv}" 2>/dev/null || true
-  fi
-done
+if systemctl is-enabled --quiet streampulse-player.service 2>/dev/null || systemctl is-active --quiet streampulse-player.service 2>/dev/null; then
+  systemctl restart streampulse-player.service 2>/dev/null || true
+fi
 
 echo "[OK] System configuration successfully restored from snapshot."

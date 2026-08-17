@@ -297,7 +297,7 @@ fi
 # 5. Terminate & Remove Competing/Legacy Processes & Services
 # ------------------------------------------------------------------------------
 echo "[+] Eliminating duplicate/competing playback services & legacy loops..."
-for legacy_svc in streampulse-rpi-player.service streampulse-kiosk.service streampulse.service; do
+for legacy_svc in streampulse-rpi-player.service streampulse-kiosk.service streampulse.service streampulse-dashboard.service; do
   if systemctl is-active --quiet "${legacy_svc}" 2>/dev/null; then
     echo "  -> Stopping legacy service: ${legacy_svc}"
     systemctl stop "${legacy_svc}" 2>/dev/null || true
@@ -307,6 +307,9 @@ for legacy_svc in streampulse-rpi-player.service streampulse-kiosk.service strea
     systemctl disable "${legacy_svc}" 2>/dev/null || true
   fi
   rm -f "/etc/systemd/system/${legacy_svc}" 2>/dev/null || true
+  rm -f "/etc/systemd/system/graphical.target.wants/${legacy_svc}" 2>/dev/null || true
+  rm -f "/etc/systemd/system/default.target.wants/${legacy_svc}" 2>/dev/null || true
+  rm -f "/etc/systemd/system/multi-user.target.wants/${legacy_svc}" 2>/dev/null || true
 done
 
 # Terminate any rogue mpv or cvlc loops competing for fullscreen display
@@ -1232,12 +1235,11 @@ fi
 
 echo "  [+] Updated configuration saved to ${CONFIG_FILE}"
 
-for srv in streampulse-player.service streampulse-dashboard.service; do
-  if systemctl is-active --quiet "${srv}" 2>/dev/null || systemctl is-enabled --quiet "${srv}" 2>/dev/null; then
-    echo "  [+] Reloading authoritative service: ${srv}..."
-    systemctl restart "${srv}" 2>/dev/null || true
-  fi
-done
+# Safely restart the single authoritative player service
+if systemctl is-active --quiet streampulse-player.service 2>/dev/null || systemctl is-enabled --quiet streampulse-player.service 2>/dev/null; then
+  echo "  [+] Reloading authoritative service: streampulse-player.service..."
+  systemctl restart streampulse-player.service 2>/dev/null || true
+fi
 
 VERIFIED_CHANNEL="$(grep '^CHANNEL_NAME=' "${CONFIG_FILE}" | cut -d= -f2 | tr -d '"')"
 if [[ "${VERIFIED_CHANNEL}" == "${NEW_CHANNEL}" ]]; then
@@ -1347,11 +1349,9 @@ if [[ -d "${RESTORE_DIR}/autostart/autostart" ]] && [[ -d "${USER_HOME}/.config/
   cp -p "${RESTORE_DIR}/autostart/autostart" "${USER_HOME}/.config/labwc/autostart" 2>/dev/null || true
 fi
 
-for srv in streampulse-player.service streampulse-dashboard.service; do
-  if systemctl is-enabled --quiet "${srv}" 2>/dev/null; then
-    systemctl restart "${srv}" 2>/dev/null || true
-  fi
-done
+if systemctl is-enabled --quiet streampulse-player.service 2>/dev/null || systemctl is-active --quiet streampulse-player.service 2>/dev/null; then
+  systemctl restart streampulse-player.service 2>/dev/null || true
+fi
 
 echo "[OK] System configuration successfully restored from snapshot."
 EOF_RESTORE
@@ -1389,15 +1389,13 @@ fi
 
 echo "----------------------------------------------------------------------"
 echo "Authoritative Playback Service Status:"
-for srv in streampulse-player.service streampulse-dashboard.service; do
-  if systemctl is-active --quiet "${srv}" 2>/dev/null; then
-    echo "  [OK] ${srv}: ACTIVE (Running)"
-  elif systemctl is-enabled --quiet "${srv}" 2>/dev/null; then
-    echo "  [WARN] ${srv}: ENABLED (Not active right now)"
-  else
-    echo "  [INFO] ${srv}: INACTIVE"
-  fi
-done
+if systemctl is-active --quiet streampulse-player.service 2>/dev/null; then
+  echo "  [OK] streampulse-player.service: ACTIVE (Running)"
+elif systemctl is-enabled --quiet streampulse-player.service 2>/dev/null; then
+  echo "  [WARN] streampulse-player.service: ENABLED (Not active right now)"
+else
+  echo "  [INFO] streampulse-player.service: INACTIVE"
+fi
 
 echo "----------------------------------------------------------------------"
 echo "Competing Legacy Services Check:"
@@ -1545,10 +1543,10 @@ else
 fi
 
 # 11. Authoritative Systemd Service Check
-if [[ -f /etc/systemd/system/streampulse-player.service ]] || [[ -f /etc/systemd/system/streampulse-dashboard.service ]]; then
-  print_pass "Playback Service" "Authoritative playback service registered"
+if [[ -f /etc/systemd/system/streampulse-player.service ]]; then
+  print_pass "Playback Service" "Authoritative streampulse-player.service unit registered"
 else
-  print_fail "Playback Service" "Authoritative service unit missing"
+  print_fail "Playback Service" "Authoritative service unit (/etc/systemd/system/streampulse-player.service) missing"
 fi
 
 # 12. Competing Service Absence Check (Zero conflicts)
@@ -1601,8 +1599,8 @@ else
 fi
 
 # 18. Auto-Start & Reboot Persistence Check
-if systemctl is-enabled streampulse-player.service >/dev/null 2>&1 || systemctl is-enabled streampulse-dashboard.service >/dev/null 2>&1; then
-  print_pass "Reboot Persistence" "Playback service ENABLED on boot"
+if systemctl is-enabled streampulse-player.service >/dev/null 2>&1; then
+  print_pass "Reboot Persistence" "streampulse-player.service ENABLED on boot"
 else
   print_warn "Reboot Persistence" "Playback service not yet enabled"
 fi
@@ -1641,6 +1639,18 @@ fi
 # ------------------------------------------------------------------------------
 echo "[+] Provisioning Single Authoritative systemd service unit..."
 
+# Ensure any legacy / duplicate dashboard service or alias symlinks are removed
+if systemctl is-active --quiet streampulse-dashboard.service 2>/dev/null; then
+  systemctl stop streampulse-dashboard.service 2>/dev/null || true
+fi
+if systemctl is-enabled --quiet streampulse-dashboard.service 2>/dev/null; then
+  systemctl disable streampulse-dashboard.service 2>/dev/null || true
+fi
+rm -f /etc/systemd/system/streampulse-dashboard.service 2>/dev/null || true
+rm -f /etc/systemd/system/graphical.target.wants/streampulse-dashboard.service 2>/dev/null || true
+rm -f /etc/systemd/system/default.target.wants/streampulse-dashboard.service 2>/dev/null || true
+rm -f /etc/systemd/system/multi-user.target.wants/streampulse-dashboard.service 2>/dev/null || true
+
 cat <<UNIT > /etc/systemd/system/streampulse-player.service
 [Unit]
 Description=StreamPulse Authoritative Fullscreen Player Service
@@ -1669,41 +1679,9 @@ StandardError=journal
 
 [Install]
 WantedBy=graphical.target default.target
-Alias=streampulse-dashboard.service
 UNIT
 
-# Also maintain streampulse-dashboard.service as clean symlink/unit pointing to streampulse-player.sh
-cat <<UNIT > /etc/systemd/system/streampulse-dashboard.service
-[Unit]
-Description=StreamPulse Dashboard Kiosk Service (Universal)
-Documentation=https://streampulse.io
-After=network-online.target sound.target graphical-session.target graphical.target
-Wants=network-online.target
-Conflicts=streampulse-rpi-player.service
-
-[Service]
-Type=simple
-User=${TARGET_USER}
-Group=${TARGET_GID}
-WorkingDirectory=/opt/streampulse
-Environment=DISPLAY=:0
-Environment=WAYLAND_DISPLAY=wayland-0
-Environment=XDG_RUNTIME_DIR=/run/user/${TARGET_UID}
-Environment=HOME=${USER_HOME}
-ExecStartPre=/bin/sleep 2
-ExecStart=/opt/streampulse/bin/streampulse-player.sh
-Restart=always
-RestartSec=3
-KillMode=mixed
-TimeoutStopSec=10
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=graphical.target default.target
-UNIT
-
-chmod 644 /etc/systemd/system/streampulse-player.service /etc/systemd/system/streampulse-dashboard.service
+chmod 644 /etc/systemd/system/streampulse-player.service
 systemctl daemon-reload
 systemctl enable streampulse-player.service
 

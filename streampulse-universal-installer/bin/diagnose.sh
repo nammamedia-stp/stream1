@@ -33,15 +33,13 @@ fi
 
 echo "----------------------------------------------------------------------"
 echo "Authoritative Playback Service Status:"
-for srv in streampulse-player.service streampulse-dashboard.service; do
-  if systemctl is-active --quiet "${srv}" 2>/dev/null; then
-    echo "  [OK] ${srv}: ACTIVE (Running)"
-  elif systemctl is-enabled --quiet "${srv}" 2>/dev/null; then
-    echo "  [WARN] ${srv}: ENABLED (Not active right now)"
-  else
-    echo "  [INFO] ${srv}: INACTIVE"
-  fi
-done
+if systemctl is-active --quiet streampulse-player.service 2>/dev/null; then
+  echo "  [OK] streampulse-player.service: ACTIVE (Running)"
+elif systemctl is-enabled --quiet streampulse-player.service 2>/dev/null; then
+  echo "  [WARN] streampulse-player.service: ENABLED (Not active right now)"
+else
+  echo "  [INFO] streampulse-player.service: INACTIVE"
+fi
 
 echo "----------------------------------------------------------------------"
 echo "Competing Legacy Services Check:"

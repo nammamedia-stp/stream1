@@ -88,12 +88,10 @@ fi
 echo "  [+] Updated configuration saved to ${CONFIG_FILE}"
 
 # Safely restart the single authoritative player service
-for srv in streampulse-player.service streampulse-dashboard.service; do
-  if systemctl is-active --quiet "${srv}" 2>/dev/null || systemctl is-enabled --quiet "${srv}" 2>/dev/null; then
-    echo "  [+] Reloading authoritative service: ${srv}..."
-    systemctl restart "${srv}" 2>/dev/null || true
-  fi
-done
+if systemctl is-active --quiet streampulse-player.service 2>/dev/null || systemctl is-enabled --quiet streampulse-player.service 2>/dev/null; then
+  echo "  [+] Reloading authoritative service: streampulse-player.service..."
+  systemctl restart streampulse-player.service 2>/dev/null || true
+fi
 
 VERIFIED_CHANNEL="$(grep '^CHANNEL_NAME=' "${CONFIG_FILE}" | cut -d= -f2 | tr -d '"')"
 if [[ "${VERIFIED_CHANNEL}" == "${NEW_CHANNEL}" ]]; then

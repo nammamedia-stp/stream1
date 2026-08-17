@@ -121,10 +121,10 @@ else
 fi
 
 # 11. Authoritative Systemd Service Check
-if [[ -f /etc/systemd/system/streampulse-player.service ]] || [[ -f /etc/systemd/system/streampulse-dashboard.service ]]; then
-  print_pass "Playback Service" "Authoritative playback service registered"
+if [[ -f /etc/systemd/system/streampulse-player.service ]]; then
+  print_pass "Playback Service" "Authoritative streampulse-player.service unit registered"
 else
-  print_fail "Playback Service" "Authoritative service unit missing"
+  print_fail "Playback Service" "Authoritative service unit (/etc/systemd/system/streampulse-player.service) missing"
 fi
 
 # 12. Competing Service Absence Check (Zero conflicts)
@@ -177,8 +177,8 @@ else
 fi
 
 # 18. Auto-Start & Reboot Persistence Check
-if systemctl is-enabled streampulse-player.service >/dev/null 2>&1 || systemctl is-enabled streampulse-dashboard.service >/dev/null 2>&1; then
-  print_pass "Reboot Persistence" "Playback service ENABLED on boot"
+if systemctl is-enabled streampulse-player.service >/dev/null 2>&1; then
+  print_pass "Reboot Persistence" "streampulse-player.service ENABLED on boot"
 else
   print_warn "Reboot Persistence" "Playback service not yet enabled"
 fi

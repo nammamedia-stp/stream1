@@ -25,4 +25,3 @@ StandardError=journal
 
 [Install]
 WantedBy=graphical.target default.target
-Alias=streampulse-dashboard.service

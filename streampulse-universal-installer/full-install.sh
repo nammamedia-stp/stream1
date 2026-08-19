@@ -472,7 +472,13 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>StreamPulse Kiosk Player</title>
   <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; -webkit-user-select: none; }
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+    }
     html, body {
       width: 100vw;
       height: 100vh;
@@ -481,7 +487,9 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       color: #ffffff;
     }
-    .cursor-hidden { cursor: none !important; }
+    .cursor-hidden {
+      cursor: none !important;
+    }
     #player-container {
       position: absolute;
       top: 0;
@@ -506,10 +514,23 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       outline: none;
       transition: opacity 0.3s ease-in-out;
     }
-    #live-video { z-index: 20; opacity: 0; pointer-events: none; }
-    #live-video.active { opacity: 1; pointer-events: auto; }
-    #motion-video { z-index: 10; opacity: 1; }
-    #motion-video.hidden { opacity: 0; pointer-events: none; }
+    #live-video {
+      z-index: 20;
+      opacity: 0;
+      pointer-events: none;
+    }
+    #live-video.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    #motion-video {
+      z-index: 10;
+      opacity: 1;
+    }
+    #motion-video.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
     #html-fallback {
       position: absolute;
       top: 0;
@@ -526,7 +547,9 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       text-align: center;
       padding: 32px;
     }
-    #html-fallback.active { display: flex; }
+    #html-fallback.active {
+      display: flex;
+    }
     .pulse-ring {
       width: 150px;
       height: 150px;
@@ -586,10 +609,22 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       letter-spacing: 0.02em;
     }
     @keyframes pulse-ring {
-      0%, 100% { transform: scale(1); border-color: #6366f1; opacity: 0.8; }
-      50% { transform: scale(1.1); border-color: #06b6d4; opacity: 1; box-shadow: 0 0 45px rgba(6, 182, 212, 0.4); }
+      0%, 100% {
+        transform: scale(1);
+        border-color: #6366f1;
+        opacity: 0.8;
+      }
+      50% {
+        transform: scale(1.1);
+        border-color: #06b6d4;
+        opacity: 1;
+        box-shadow: 0 0 45px rgba(6, 182, 212, 0.4);
+      }
     }
-    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
     .status-overlay {
       position: absolute;
       bottom: 24px;
@@ -631,11 +666,16 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
 </head>
 <body class="cursor-hidden">
   <div id="player-container">
+    <!-- 1. Live HLS Video Element -->
     <video id="live-video" class="kiosk-video" autoplay playsinline muted preload="auto"></video>
+
+    <!-- 2. Permanent Offline Motion Logo Video Element -->
     <video id="motion-video" class="kiosk-video" autoplay loop muted playsinline preload="auto">
       <source src="motion-logo.mp4" type="video/mp4">
       <source src="/opt/streampulse/logo/motion-logo.mp4" type="video/mp4">
     </video>
+
+    <!-- 3. Local HTML Fallback (when MP4 is unplayable) -->
     <div id="html-fallback">
       <div class="pulse-ring">
         <div class="pulse-core">
@@ -651,6 +691,8 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       </div>
       <div id="fallback-status" class="status-message">Waiting for live broadcast stream...</div>
     </div>
+
+    <!-- 4. Subtle Overlay Status Badge -->
     <div id="status-overlay" class="status-overlay">
       <div id="status-badge" class="status-badge offline"></div>
       <span id="status-text">Standby • StreamPulse Logo Active</span>
@@ -658,30 +700,32 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
     </div>
   </div>
 
-  <script>
-    (function() {
-      const script = document.createElement('script');
-      script.src = 'hls.min.js';
-      script.onerror = function() {
-        const cdn = document.createElement('script');
-        cdn.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js';
-        document.head.appendChild(cdn);
-      };
-      document.head.appendChild(script);
-    })();
-  </script>
+  <!-- Local HLS.js Library (Installed offline in /opt/streampulse/logo/) -->
+  <script src="hls.min.js"></script>
 
   <script>
     (function() {
+      // --------------------------------------------------
+      // Configuration & Parameter Extraction
+      // --------------------------------------------------
       const params = new URLSearchParams(window.location.search);
       const channelName = params.get('channel') || params.get('channelName') || 'channel1';
       const streamKey = params.get('key') || params.get('streamKey') || 'live_stream';
       let serverUrl = params.get('server') || params.get('serverUrl') || '';
+      
       if (!serverUrl) {
-        serverUrl = window.location.protocol.startsWith('http') ? window.location.origin : 'http://187.127.210.81';
+        if (window.location.protocol.startsWith('http')) {
+          serverUrl = window.location.origin;
+        } else {
+          serverUrl = 'http://187.127.210.81';
+        }
       }
       serverUrl = serverUrl.replace(/\/+$/, '');
 
+      // Direct HLS override if specified
+      const directHlsUrl = params.get('hls') || '';
+
+      // Elements
       const liveVideo = document.getElementById('live-video');
       const motionVideo = document.getElementById('motion-video');
       const htmlFallback = document.getElementById('html-fallback');
@@ -692,17 +736,23 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       const statusText = document.getElementById('status-text');
       const statusMetrics = document.getElementById('status-metrics');
 
-      if (fallbackChannelName) fallbackChannelName.textContent = 'Channel: ' + channelName;
+      if (fallbackChannelName) {
+        fallbackChannelName.textContent = 'Channel: ' + channelName;
+      }
 
-      const candidateHlsUrls = [
-        serverUrl + '/hls/' + channelName + '.m3u8',
-        serverUrl + '/hls/' + channelName + '/master.m3u8',
-        serverUrl + '/hls/' + channelName + '/index.m3u8',
+      // Candidate HLS URLs in priority order
+      const candidateHlsUrls = directHlsUrl ? [directHlsUrl] : [
         serverUrl + '/hls/' + streamKey + '/master.m3u8',
-        serverUrl + '/hls/' + streamKey + '/index.m3u8'
-      ];
+        serverUrl + '/hls/' + streamKey + '/Original/index.m3u8',
+        serverUrl + '/hls/' + streamKey + '/index.m3u8',
+        serverUrl + '/hls/' + channelName + '/master.m3u8',
+        serverUrl + '/hls/' + channelName + '/Original/index.m3u8',
+        serverUrl + '/hls/' + channelName + '/index.m3u8',
+        serverUrl + '/hls/' + channelName + '.m3u8'
+      ].filter((url, idx, arr) => url && arr.indexOf(url) === idx);
 
-      let currentState = 'STANDBY';
+      // State Machine Variables
+      let currentState = 'STANDBY'; // 'STANDBY' | 'LIVE'
       let activeHlsUrl = '';
       let hlsInstance = null;
       let pollIntervalTimer = null;
@@ -710,11 +760,23 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       let mp4Failed = false;
       let overlayFadeTimer = null;
 
+      // Auto-Recovery & Stalled Video Watchdog Variables
+      let consecutiveHlsFailures = 0;
+      let lastPlayheadTime = -1;
+      let stallCheckIntervalTimer = null;
+      let stallCount = 0;
+      const REFRESH_COOLDOWN_MS = 45000; // 45s minimum cooldown between controlled reloads
+
+      // --------------------------------------------------
+      // UI / Cursor Auto-Hide & Status Badge Helpers
+      // --------------------------------------------------
       let mouseTimer = null;
       function resetCursor() {
         document.body.classList.remove('cursor-hidden');
         clearTimeout(mouseTimer);
-        mouseTimer = setTimeout(() => document.body.classList.add('cursor-hidden'), 2500);
+        mouseTimer = setTimeout(() => {
+          document.body.classList.add('cursor-hidden');
+        }, 2500);
       }
       window.addEventListener('mousemove', resetCursor);
       window.addEventListener('keydown', resetCursor);
@@ -725,40 +787,84 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
         statusText.textContent = title || '';
         statusMetrics.textContent = detail || '';
         statusOverlay.style.opacity = '1';
+
         clearTimeout(overlayFadeTimer);
         if (autoHideMs && autoHideMs > 0) {
-          overlayFadeTimer = setTimeout(() => { statusOverlay.style.opacity = '0'; }, autoHideMs);
+          overlayFadeTimer = setTimeout(() => {
+            statusOverlay.style.opacity = '0';
+          }, autoHideMs);
         }
       }
 
+      // --------------------------------------------------
+      // Controlled Last-Resort Full Page Refresh (Guarded)
+      // --------------------------------------------------
+      function triggerControlledReload(reason) {
+        console.warn('[StreamPulse Player] Evaluating controlled last-resort page refresh. Reason:', reason);
+        const now = Date.now();
+        let lastReload = 0;
+        try {
+          lastReload = parseInt(sessionStorage.getItem('streampulse_last_reload') || '0', 10);
+        } catch(e) {}
+
+        if (now - lastReload < REFRESH_COOLDOWN_MS) {
+          console.warn('[StreamPulse Player] Controlled refresh in cooldown window (' + Math.round((REFRESH_COOLDOWN_MS - (now - lastReload)) / 1000) + 's remaining). Falling back to offline logo + polling.');
+          switchToOfflineStandby('Refresh Cooldown Active - ' + reason);
+          return;
+        }
+
+        try {
+          sessionStorage.setItem('streampulse_last_reload', now.toString());
+        } catch(e) {}
+
+        console.warn('[StreamPulse Player] [AUTO-REFRESH] Executing last-resort page reload now (' + reason + ')...');
+        window.location.reload();
+      }
+
+      // --------------------------------------------------
+      // Safe Video Playback Utilities
+      // --------------------------------------------------
       function safePlay(videoEl) {
         if (!videoEl) return Promise.resolve();
         videoEl.muted = true;
         videoEl.playsInline = true;
-        const p = videoEl.play();
-        if (p !== undefined) {
-          return p.catch(err => {
+        const playPromise = videoEl.play();
+        if (playPromise !== undefined) {
+          return playPromise.catch(err => {
+            console.warn('[StreamPulse Player] Play rejected, retrying muted:', err.message);
             videoEl.muted = true;
-            return videoEl.play().catch(e => {});
+            return videoEl.play().catch(e => {
+              console.warn('[StreamPulse Player] Muted play also failed:', e.message);
+            });
           });
         }
         return Promise.resolve();
       }
 
+      // User interaction listener to allow unmuting audio
       function tryUnmute() {
-        if (currentState === 'LIVE' && liveVideo) liveVideo.muted = false;
+        if (currentState === 'LIVE' && liveVideo) {
+          liveVideo.muted = false;
+        }
       }
       window.addEventListener('click', tryUnmute);
       window.addEventListener('touchstart', tryUnmute);
       window.addEventListener('keydown', tryUnmute);
 
+      // --------------------------------------------------
+      // Motion Logo & Fallback HTML Handling
+      // --------------------------------------------------
       function showOfflineVisuals() {
         if (!mp4Failed) {
+          console.log('[StreamPulse Player] [LOGO ACTIVATION] Displaying Motion Logo MP4 loop.');
           motionVideo.classList.remove('hidden');
           htmlFallback.classList.remove('active');
           motionVideo.currentTime = 0;
-          safePlay(motionVideo).catch(handleMp4Failure);
+          safePlay(motionVideo).catch(() => {
+            handleMp4Failure();
+          });
         } else {
+          console.log('[StreamPulse Player] [LOGO ACTIVATION] Displaying HTML/CSS animated fallback.');
           motionVideo.classList.add('hidden');
           htmlFallback.classList.add('active');
         }
@@ -766,14 +872,19 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
 
       function handleMp4Failure() {
         mp4Failed = true;
+        console.warn('[StreamPulse Player] Motion Logo MP4 unavailable or unplayable. Activating HTML fallback.');
         motionVideo.classList.add('hidden');
         htmlFallback.classList.add('active');
-        if (fallbackStatus) fallbackStatus.textContent = 'Stream offline • Polling ' + serverUrl + '...';
+        if (fallbackStatus) {
+          fallbackStatus.textContent = 'Stream offline • Polling ' + serverUrl + '...';
+        }
       }
 
       motionVideo.addEventListener('error', handleMp4Failure);
       motionVideo.addEventListener('stalled', () => {
-        if (currentState === 'STANDBY' && motionVideo.paused && !mp4Failed) safePlay(motionVideo);
+        if (currentState === 'STANDBY' && motionVideo.paused && !mp4Failed) {
+          safePlay(motionVideo);
+        }
       });
       motionVideo.addEventListener('ended', () => {
         if (currentState === 'STANDBY' && !mp4Failed) {
@@ -782,24 +893,115 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
         }
       });
 
+      // --------------------------------------------------
+      // STATE A & C: Switch to Offline Standby (Logo / Fallback)
+      // --------------------------------------------------
       function switchToOfflineStandby(reason) {
         if (currentState === 'STANDBY') return;
         currentState = 'STANDBY';
+        console.log('[StreamPulse Player] [STREAM OFFLINE] Entering STANDBY state. Reason:', reason || 'Stream Dropped');
+
+        // Stop stalled watchdog while offline
+        stopStallWatchdog();
+
+        // 1. Destroy active HLS instance
         if (hlsInstance) {
-          try { hlsInstance.destroy(); } catch (e) {}
+          try {
+            hlsInstance.destroy();
+          } catch (e) {}
           hlsInstance = null;
         }
+
+        // 2. Hide & pause live video
         liveVideo.classList.remove('active');
-        try { liveVideo.pause(); liveVideo.removeAttribute('src'); liveVideo.load(); } catch (e) {}
+        try {
+          liveVideo.pause();
+          liveVideo.removeAttribute('src');
+          liveVideo.load();
+        } catch (e) {}
+
+        // 3. Show & play offline logo visuals
         showOfflineVisuals();
+
+        // 4. Update status overlay
         updateStatus('offline', 'Stream Offline • Logo Active', 'Channel: ' + channelName, 0);
+
+        // 5. Resume background polling for HLS
         startStreamPolling();
       }
 
+      // --------------------------------------------------
+      // Stalled Video Watchdog
+      // --------------------------------------------------
+      function startStallWatchdog() {
+        stopStallWatchdog();
+        lastPlayheadTime = liveVideo ? liveVideo.currentTime : -1;
+        stallCount = 0;
+
+        stallCheckIntervalTimer = setInterval(() => {
+          if (currentState !== 'LIVE' || !liveVideo) return;
+
+          // Check if video is playing and advancing
+          const currentTime = liveVideo.currentTime;
+          const isPaused = liveVideo.paused;
+          const readyState = liveVideo.readyState;
+
+          if (isPaused || readyState < 2 || (currentTime === lastPlayheadTime && currentTime > 0)) {
+            stallCount++;
+            console.warn('[StreamPulse Player] [STALLED VIDEO] Playback stall detected (stall ' + stallCount + '/5, readyState=' + readyState + ', paused=' + isPaused + ')');
+
+            // Hierarchy Level 1: Attempt direct play
+            safePlay(liveVideo);
+
+            // Hierarchy Level 2: If stalled for > 2 ticks, attempt HLS media recovery
+            if (stallCount === 2 && hlsInstance) {
+              console.log('[StreamPulse Player] [HLS RECOVERY] Stalled watchdog invoking recoverMediaError...');
+              try { hlsInstance.recoverMediaError(); safePlay(liveVideo); } catch(e) {}
+            }
+
+            // Hierarchy Level 3: If stalled for > 4 ticks, recreate HLS instance
+            if (stallCount >= 4) {
+              console.warn('[StreamPulse Player] [HLS RECREATION] Stalled watchdog recreating HLS instance...');
+              consecutiveHlsFailures++;
+              if (consecutiveHlsFailures >= 5) {
+                triggerControlledReload('Persistent Stalled Playback');
+                return;
+              }
+              const currentUrl = activeHlsUrl;
+              if (hlsInstance) {
+                try { hlsInstance.destroy(); } catch(e) {}
+                hlsInstance = null;
+              }
+              switchToOfflineStandby('Watchdog Stalled Recovery');
+              return;
+            }
+          } else {
+            // Normal advancing playback: reset stall counter
+            stallCount = 0;
+            consecutiveHlsFailures = 0;
+          }
+
+          lastPlayheadTime = currentTime;
+        }, 3500);
+      }
+
+      function stopStallWatchdog() {
+        if (stallCheckIntervalTimer) {
+          clearInterval(stallCheckIntervalTimer);
+          stallCheckIntervalTimer = null;
+        }
+      }
+
+      // --------------------------------------------------
+      // STATE B & D: Switch to Live HLS
+      // --------------------------------------------------
       function switchToLiveHls(validHlsUrl) {
         if (currentState === 'LIVE' && activeHlsUrl === validHlsUrl) return;
         currentState = 'LIVE';
         activeHlsUrl = validHlsUrl;
+        console.log('[StreamPulse Player] [STREAM ONLINE] Entering LIVE state. HLS URL:', validHlsUrl);
+
+        // Stop polling while actively playing live stream
         stopStreamPolling();
 
         if (hlsInstance) {
@@ -809,7 +1011,9 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
 
         const cacheBustUrl = validHlsUrl + (validHlsUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
 
+        // If HLS.js is supported (Standard Chromium / Chrome / Firefox)
         if (window.Hls && window.Hls.isSupported()) {
+          console.log('[StreamPulse Player] [HLS INITIALIZATION] Instantiating Hls.js engine...');
           hlsInstance = new window.Hls({
             enableWorker: true,
             lowLatencyMode: true,
@@ -817,69 +1021,143 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
             maxBufferLength: 10,
             liveBackBufferLength: 6,
             manifestLoadingTimeOut: 6000,
-            manifestLoadingMaxRetry: 2
+            manifestLoadingMaxRetry: 2,
+            levelLoadingTimeOut: 6000,
+            fragLoadingTimeOut: 8000
           });
-          hlsInstance.attachMedia(liveVideo);
-          hlsInstance.loadSource(cacheBustUrl);
-          hlsInstance.on(window.Hls.Events.MANIFEST_PARSED, function() {
+
+          hlsInstance.on(window.Hls.Events.MEDIA_ATTACHED, function() {
+            console.log('[StreamPulse Player] [HLS INITIALIZATION] Live media attached. Attempting autoplay...');
             safePlay(liveVideo);
           });
+
+          hlsInstance.attachMedia(liveVideo);
+          hlsInstance.loadSource(cacheBustUrl);
+
+          hlsInstance.on(window.Hls.Events.MANIFEST_PARSED, function() {
+            console.log('[StreamPulse Player] [HLS INITIALIZATION] Live manifest parsed. Starting playback...');
+            safePlay(liveVideo);
+          });
+
+          hlsInstance.on(window.Hls.Events.FRAG_BUFFERED, function() {
+            if (liveVideo.paused) {
+              safePlay(liveVideo);
+            }
+          });
+
           hlsInstance.on(window.Hls.Events.ERROR, function(event, data) {
+            console.warn('[StreamPulse Player] [HLS ERROR] Event error: type=' + data.type + ', details=' + data.details + ', fatal=' + data.fatal);
+
             if (data.fatal) {
+              consecutiveHlsFailures++;
               if (data.type === window.Hls.ErrorTypes.MEDIA_ERROR) {
-                try { hlsInstance.recoverMediaError(); safePlay(liveVideo); } catch(e) { switchToOfflineStandby('Media Error'); }
+                console.log('[StreamPulse Player] [HLS RECOVERY] Fatal media error encountered. Invoking recoverMediaError()...');
+                try {
+                  hlsInstance.recoverMediaError();
+                  safePlay(liveVideo);
+                } catch (e) {
+                  console.warn('[StreamPulse Player] [HLS RECOVERY] recoverMediaError failed. Switching to offline standby.');
+                  if (consecutiveHlsFailures >= 5) {
+                    triggerControlledReload('Fatal Media Error Exhaustion');
+                  } else {
+                    switchToOfflineStandby('Media Error Unrecoverable');
+                  }
+                }
+              } else if (data.type === window.Hls.ErrorTypes.NETWORK_ERROR) {
+                // Manifest / Fragment 404 or stream offline
+                console.log('[StreamPulse Player] [HLS ERROR] Fatal network/404 error. Returning to offline logo + polling.');
+                switchToOfflineStandby('Stream Endpoint Returned Error/404');
               } else {
-                switchToOfflineStandby('Stream Unavailable / 404');
+                console.warn('[StreamPulse Player] [HLS ERROR] Other fatal HLS error encountered.');
+                if (consecutiveHlsFailures >= 5) {
+                  triggerControlledReload('Repeated Fatal HLS Errors');
+                } else {
+                  switchToOfflineStandby('Fatal HLS Error');
+                }
               }
             }
           });
         } else if (liveVideo.canPlayType('application/vnd.apple.mpegurl')) {
+          // Native Safari / HLS
           liveVideo.src = cacheBustUrl;
           safePlay(liveVideo);
         } else {
+          console.error('[StreamPulse Player] No HLS playback engine available.');
           switchToOfflineStandby('HLS Engine Missing');
           return;
         }
 
+        // When live video actually starts rendering frames
         function onLivePlaying() {
           liveVideo.removeEventListener('playing', onLivePlaying);
           if (currentState !== 'LIVE') return;
+
+          console.log('[StreamPulse Player] [LIVE VIDEO ACTIVATION] Live stream rendering confirmed. Hiding offline logo.');
+
+          // Reset failure and stall counters upon verified playback
+          consecutiveHlsFailures = 0;
+          stallCount = 0;
+
+          // Transition visuals: Hide logo & show live stream
           motionVideo.classList.add('hidden');
           htmlFallback.classList.remove('active');
           try { motionVideo.pause(); } catch(e) {}
+
           liveVideo.classList.add('active');
+
           const h = liveVideo.videoHeight || 1080;
           updateStatus('live', 'Live • ' + h + 'p', 'Channel: ' + channelName, 6000);
+
+          // Start stall watchdog to monitor continuous playback
+          startStallWatchdog();
         }
         liveVideo.addEventListener('playing', onLivePlaying);
       }
 
-      liveVideo.addEventListener('error', function() {
-        if (currentState === 'LIVE') switchToOfflineStandby('Live Video Error');
+      // Monitor live video stalls or errors
+      liveVideo.addEventListener('error', function(e) {
+        if (currentState === 'LIVE') {
+          console.warn('[StreamPulse Player] Live video element error event fired. Falling back to logo.');
+          switchToOfflineStandby('Live Video Element Error');
+        }
       });
 
+      // --------------------------------------------------
+      // Robust Asynchronous HLS Stream Poller
+      // --------------------------------------------------
       async function checkStreamAvailability() {
         if (isProbing || currentState === 'LIVE') return;
         isProbing = true;
+
         for (const testUrl of candidateHlsUrls) {
           try {
             const probeUrl = testUrl + (testUrl.includes('?') ? '&' : '?') + '_probe=' + Date.now();
-            const res = await fetch(probeUrl, { method: 'GET', cache: 'no-store' });
+            const res = await fetch(probeUrl, {
+              method: 'GET',
+              cache: 'no-store',
+              headers: { 'Accept': 'application/x-mpegURL, application/vnd.apple.mpegurl, */*' }
+            });
+
             if (res.ok && res.status === 200) {
               const text = await res.text();
               if (text && text.includes('#EXTM3U')) {
+                console.log('[StreamPulse Player] [HLS PROBING] Active HLS Stream verified at:', testUrl);
                 isProbing = false;
                 switchToLiveHls(testUrl);
                 return;
               }
             }
-          } catch(err) {}
+          } catch (err) {
+            // Stream is offline or network connecting; continue gracefully
+          }
         }
+
         isProbing = false;
       }
 
       function startStreamPolling() {
         stopStreamPolling();
+        // Probe immediately, then every 2 seconds
         checkStreamAvailability();
         pollIntervalTimer = setInterval(checkStreamAvailability, 2000);
       }
@@ -891,17 +1169,55 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
         }
       }
 
+      // --------------------------------------------------
+      // Telemetry Heartbeat (Optional / Safe)
+      // --------------------------------------------------
+      setInterval(function sendHeartbeat() {
+        if (!serverUrl || !serverUrl.startsWith('http')) return;
+        fetch(serverUrl + '/api/rpi-player/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            channel: channelName,
+            streamKey: streamKey,
+            online_status: currentState === 'LIVE' ? 'playing' : 'offline_logo',
+            current_resolution: (liveVideo.videoWidth || 1920) + 'x' + (liveVideo.videoHeight || 1080),
+            engine: currentState === 'LIVE' ? 'HLS.js' : 'Motion Logo',
+            player_version: '2.0.0-universal'
+          })
+        }).catch(() => {});
+      }, 10000);
+
+      // --------------------------------------------------
+      // Initial Startup Execution
+      // --------------------------------------------------
+      // 1. Start Motion Logo loop immediately on boot
       showOfflineVisuals();
-      updateStatus('offline', 'StreamPulse Standby', 'Channel: ' + channelName + ' • Probing...', 0);
+      updateStatus('offline', 'StreamPulse Standby', 'Channel: ' + channelName + ' • Probing stream...', 0);
+
+      // 2. Begin probing HLS streams
       startStreamPolling();
+
     })();
   </script>
 </body>
 </html>
+
 HTML
 
-# Attempt local download of hls.min.js for completely offline operation
-curl -s -f -m 10 "https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js" -o /opt/streampulse/logo/hls.min.js 2>/dev/null || true
+# Mandatory local download and verification of hls.min.js for offline operation
+echo "[+] Downloading and verifying local HLS.js playback engine..."
+if ! curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
+  "https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js" \
+  -o /opt/streampulse/logo/hls.min.js; then
+  echo -e "\e[31m[FAIL] Mandatory local HLS.js download failed from CDN.\e[0m" >&2
+  exit 1
+fi
+
+if [[ ! -s /opt/streampulse/logo/hls.min.js ]]; then
+  echo -e "\e[31m[FAIL] /opt/streampulse/logo/hls.min.js is empty or missing.\e[0m" >&2
+  exit 1
+fi
 chmod 644 /opt/streampulse/logo/* 2>/dev/null || true
 
 # ------------------------------------------------------------------------------
@@ -1000,7 +1316,9 @@ cat << 'EOF_PLAYER' > /opt/streampulse/bin/streampulse-player.sh
 
 set -uo pipefail
 
+# ------------------------------------------------------------------------------
 # 1. Strict Process Lock (Guarantees ONLY ONE player instance ever runs)
+# ------------------------------------------------------------------------------
 LOCK_FILE="/tmp/streampulse-player.lock"
 exec 200>"${LOCK_FILE}"
 if ! flock -n 200; then
@@ -1008,12 +1326,16 @@ if ! flock -n 200; then
   exit 0
 fi
 
+# ------------------------------------------------------------------------------
 # 2. Terminate Any Rogue Competing Playback Loops (mpv, cvlc, old launchers)
+# ------------------------------------------------------------------------------
 pkill -9 -f "mpv.*motion-logo" 2>/dev/null || true
 pkill -9 -f "cvlc.*motion-logo" 2>/dev/null || true
 pkill -9 -f "player-launcher\.sh" 2>/dev/null || true
 
-# 3. Load Configurations
+# ------------------------------------------------------------------------------
+# 3. Load Configurations (player.conf has highest priority for channel & key)
+# ------------------------------------------------------------------------------
 CONFIG_FILE="/opt/streampulse/config/kiosk.conf"
 PLAYER_CONFIG="/opt/streampulse/config/player.conf"
 
@@ -1027,10 +1349,12 @@ SCREEN_WIDTH=1920
 SCREEN_HEIGHT=1080
 
 if [[ -f "${PLAYER_CONFIG}" ]]; then
+  # shellcheck source=/dev/null
   source "${PLAYER_CONFIG}"
 fi
 
 if [[ -f "${CONFIG_FILE}" ]]; then
+  # shellcheck source=/dev/null
   source "${CONFIG_FILE}"
 fi
 
@@ -1040,26 +1364,63 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Assigned Channel: ${CHANNEL_N
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Server Endpoint:  ${SERVER_URL}"
 echo "======================================================================"
 
+# ------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 # 4. Environment & Display Resolution
+# ------------------------------------------------------------------------------
+CURRENT_UID="$(id -u)"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/${CURRENT_UID}}"
+export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
 export DISPLAY="${DISPLAY:-:0}"
-if [[ -z "${WAYLAND_DISPLAY:-}" ]] && [[ -e "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/wayland-0" ]]; then
-  export WAYLAND_DISPLAY="wayland-0"
-fi
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
-# 5. Wait for Graphical Display / Compositor
-MAX_DISPLAY_WAIT=30
+# ------------------------------------------------------------------------------
+# 5. Wait for Graphical Display / Compositor (Strict Wayland & Labwc Validation)
+# ------------------------------------------------------------------------------
+MAX_DISPLAY_WAIT=60
 DISPLAY_WAITED=0
-while ! (wlr-randr >/dev/null 2>&1 || xset q >/dev/null 2>&1 || [[ -n "${WAYLAND_DISPLAY:-}" ]] || [[ -n "${DISPLAY:-}" ]]); do
-  if (( DISPLAY_WAITED >= MAX_DISPLAY_WAIT )); then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Display check timed out, continuing launch attempt..."
+WAYLAND_SOCKET="${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}"
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Waiting for Wayland / Labwc display session readiness..."
+
+while true; do
+  SOCKET_READY=0
+  COMPOSITOR_READY=0
+
+  if [[ -S "${WAYLAND_SOCKET}" ]] || [[ -e "${WAYLAND_SOCKET}" ]]; then
+    SOCKET_READY=1
+  fi
+
+  if pgrep -u "${CURRENT_UID}" -x labwc >/dev/null 2>&1 || pgrep -x labwc >/dev/null 2>&1 || pgrep -u "${CURRENT_UID}" -x wayfire >/dev/null 2>&1 || pgrep -x Xorg >/dev/null 2>&1 || [[ -S "/tmp/.X11-unix/X0" ]]; then
+    COMPOSITOR_READY=1
+  fi
+
+  if (( SOCKET_READY == 1 && COMPOSITOR_READY == 1 )); then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Graphical display session confirmed ready (Socket: ${WAYLAND_SOCKET}, Compositor: active) after ${DISPLAY_WAITED}s."
     break
   fi
+
+  # Fallback check for X11 / Xwayland if xset succeeds
+  if command -v xset >/dev/null 2>&1 && xset q >/dev/null 2>&1; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Display verified ready via xset after ${DISPLAY_WAITED}s."
+    break
+  fi
+
+  if (( DISPLAY_WAITED >= MAX_DISPLAY_WAIT )); then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] ERROR: Graphical display / Wayland session failed to become ready after ${MAX_DISPLAY_WAIT}s. Exiting." >&2
+    exit 1
+  fi
+
+  if (( DISPLAY_WAITED % 5 == 0 && DISPLAY_WAITED > 0 )); then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Waiting for Wayland socket & compositor (${DISPLAY_WAITED}/${MAX_DISPLAY_WAIT}s)..."
+  fi
+
   sleep 1
   (( DISPLAY_WAITED++ ))
 done
 
+# ------------------------------------------------------------------------------
 # 6. Screen Power Management & Cursor Hiding
+# ------------------------------------------------------------------------------
 if command -v xset >/dev/null 2>&1; then
   xset s off -dpms s noblank 2>/dev/null || true
 fi
@@ -1070,7 +1431,9 @@ if command -v unclutter >/dev/null 2>&1; then
   pgrep -x unclutter >/dev/null 2>&1 || unclutter -idle 0.5 -root &
 fi
 
+# ------------------------------------------------------------------------------
 # 7. Locate Browser Binary
+# ------------------------------------------------------------------------------
 BROWSER_BIN=""
 for CANDIDATE in chromium chromium-browser google-chrome firefox; do
   if command -v "${CANDIDATE}" >/dev/null 2>&1; then
@@ -1084,7 +1447,9 @@ if [[ -z "${BROWSER_BIN}" ]]; then
   exit 1
 fi
 
+# ------------------------------------------------------------------------------
 # 8. Profile Directory & Clean Singleton Locks
+# ------------------------------------------------------------------------------
 mkdir -p "${BROWSER_PROFILE_DIR}"
 rm -f "${BROWSER_PROFILE_DIR}/SingletonLock" \
       "${BROWSER_PROFILE_DIR}/SingletonSocket" \
@@ -1095,7 +1460,9 @@ rm -f "${BROWSER_PROFILE_DIR}/SingletonLock" \
 pkill -f "${BROWSER_PROFILE_DIR}" 2>/dev/null || true
 sleep 0.5
 
+# ------------------------------------------------------------------------------
 # 9. Assemble Safe Browser Arguments
+# ------------------------------------------------------------------------------
 declare -a LAUNCH_ARGS=(
   "--user-data-dir=${BROWSER_PROFILE_DIR}"
   "--password-store=basic"
@@ -1117,11 +1484,15 @@ declare -a LAUNCH_ARGS=(
   "--window-size=${SCREEN_WIDTH:-1920},${SCREEN_HEIGHT:-1080}"
 )
 
+# ------------------------------------------------------------------------------
 # 10. Authoritative Target URL: Integrated HTML5 Kiosk Player
+# ------------------------------------------------------------------------------
 LOCAL_PLAYER="file:///opt/streampulse/logo/player.html"
 TARGET_URL="${LOCAL_PLAYER}?channel=${CHANNEL_NAME}&server=${SERVER_URL}&key=${STREAM_KEY}"
 
+# Support explicit custom non-default URLs if specifically configured
 if [[ -n "${DASHBOARD_URL:-}" ]] && [[ "${DASHBOARD_URL}" =~ ^https?:// ]] && [[ "${DASHBOARD_URL}" != "http://187.127.210.81/" ]] && [[ "${DASHBOARD_URL}" != "http://187.127.210.81" ]] && [[ "${DASHBOARD_URL}" != *"127.0.0.1"* ]] && [[ "${DASHBOARD_URL}" != *"localhost"* ]]; then
+  # Only use remote dashboard if not a video stream URL
   if [[ ! "${DASHBOARD_URL}" =~ \.m3u8 ]] && [[ ! "${DASHBOARD_URL}" =~ /hls/ ]]; then
     TARGET_URL="${DASHBOARD_URL}"
   fi
@@ -1131,8 +1502,11 @@ LAUNCH_ARGS+=("${TARGET_URL}")
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Launching single authoritative fullscreen UI: ${TARGET_URL}"
 
-# 11. Execute Authoritative Player Process
+# ------------------------------------------------------------------------------
+# 11. Execute Authoritative Player (Supervised by systemd)
+# ------------------------------------------------------------------------------
 exec "${BROWSER_BIN}" "${LAUNCH_ARGS[@]}"
+
 EOF_PLAYER
 
 # --- 10.2 dashboard-kiosk.sh & player-launcher.sh (Delegating wrappers) ---
@@ -1425,10 +1799,15 @@ EOF_DIAGNOSE
 # --- 10.7 validate.sh ---
 cat << 'EOF_VALIDATE' > /opt/streampulse/bin/validate.sh
 #!/usr/bin/env bash
-# StreamPulse 18-Point Universal Validation Suite
+# ==============================================================================
+# StreamPulse Universal Validation Suite
+# Managed by StreamPulse Universal Installer
+# Path: /opt/streampulse/bin/validate.sh
+# ==============================================================================
+
 set -uo pipefail
 
-TOTAL_CHECKS=18
+TOTAL_CHECKS=20
 PASSED_CHECKS=0
 FAILED_CHECKS=0
 WARNINGS=0
@@ -1456,7 +1835,7 @@ print_fail() {
 }
 
 echo "======================================================================"
-echo "          StreamPulse 18-Point Universal Validation"
+echo "          StreamPulse Universal System & Playback Validation"
 echo "======================================================================"
 echo "Timestamp: $(date '+%Y-%m-%d %H:%M:%S')"
 echo "----------------------------------------------------------------------"
@@ -1479,48 +1858,117 @@ fi
 
 # 3. Target User Check
 DETECTED_USER="${SUDO_USER:-$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $3}' | grep -v '^root$' | head -n 1 || awk -F: '$3 >= 1000 {print $1}' /etc/passwd | head -n1 || echo '')}"
+TARGET_UID="$(id -u "${DETECTED_USER}" 2>/dev/null || echo '1000')"
 if [[ -n "${DETECTED_USER}" ]] && id -u "${DETECTED_USER}" >/dev/null 2>&1; then
-  print_pass "Target User" "${DETECTED_USER} (UID: $(id -u "${DETECTED_USER}"))"
+  print_pass "Target User" "${DETECTED_USER} (UID: ${TARGET_UID})"
 else
-  print_fail "Target User" "Could not resolve valid non-root user"
+  print_fail "Target User" "Could not resolve valid non-root desktop user"
 fi
 
 # 4. Labwc / Wayland Compositor Check
-if pgrep -x labwc >/dev/null 2>&1 || which labwc >/dev/null 2>&1 || [[ -d "/home/${DETECTED_USER}/.config/labwc" ]] || [[ -d "/etc/xdg/labwc" ]]; then
-  print_pass "Labwc / Wayland" "Desktop compositor environment verified"
+if pgrep -u "${TARGET_UID}" -x labwc >/dev/null 2>&1 || pgrep -x labwc >/dev/null 2>&1 || which labwc >/dev/null 2>&1 || [[ -d "/home/${DETECTED_USER}/.config/labwc" ]] || [[ -d "/etc/xdg/labwc" ]]; then
+  print_pass "Labwc Compositor" "Labwc compositor package & config verified"
 else
-  print_warn "Labwc / Wayland" "Compositor not currently active in subshell, fallback active"
+  print_fail "Labwc Compositor" "Labwc not detected or configured"
 fi
 
-# 5. Network Check
-if hostname -I >/dev/null 2>&1 || ip addr | grep -q "inet "; then
-  LOCAL_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'connected')"
+# 5. Wayland Socket Readiness Check
+WAYLAND_SOCK="/run/user/${TARGET_UID}/wayland-0"
+if [[ -S "${WAYLAND_SOCK}" ]] || [[ -e "${WAYLAND_SOCK}" ]] || [[ -n "${WAYLAND_DISPLAY:-}" ]] || [[ -S "/tmp/.X11-unix/X0" ]]; then
+  print_pass "Wayland Socket" "Display session ready (${WAYLAND_SOCK})"
+else
+  print_warn "Wayland Socket" "${WAYLAND_SOCK} standby (will be polled by player launcher)"
+fi
+
+# 6. Network Gateway Check
+LOCAL_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || echo '')"
+if [[ -n "${LOCAL_IP}" ]]; then
   print_pass "Network Gateway" "IP: ${LOCAL_IP}"
 else
   print_fail "Network Gateway" "No local IP address assigned"
 fi
 
-# 6. Server Reachability Check
+# 7. Load Player Configuration
+PLAYER_CONF="/opt/streampulse/config/player.conf"
 SERVER_URL="http://187.127.210.81"
-if [[ -f /opt/streampulse/config/player.conf ]]; then
-  source /opt/streampulse/config/player.conf
-fi
-HTTP_CODE="$(curl -s -o /dev/null -w "%{http_code}" -m 3 "${SERVER_URL}" 2>/dev/null || echo "000")"
-if [[ "${HTTP_CODE}" =~ ^(200|301|302|304|404)$ ]]; then
-  print_pass "Server Endpoint" "HTTP ${HTTP_CODE} at ${SERVER_URL}"
+STREAM_KEY="live_stream"
+CHANNEL_NAME="channel1"
+
+if [[ -f "${PLAYER_CONF}" ]]; then
+  source "${PLAYER_CONF}"
+  if [[ -n "${STREAM_KEY:-}" ]] && [[ -n "${SERVER_URL:-}" ]]; then
+    print_pass "Player Config" "Channel: '${CHANNEL_NAME}', Server: ${SERVER_URL}"
+  else
+    print_fail "Player Config" "STREAM_KEY or SERVER_URL empty in ${PLAYER_CONF}"
+  fi
 else
-  print_warn "Server Endpoint" "HTTP code ${HTTP_CODE} (offline logo fallback will engage)"
+  print_fail "Player Config" "${PLAYER_CONF} missing"
 fi
 
-# 7. Browser Installed Check
+# 8. Server HTTP Endpoint Reachability Check
+SERVER_HTTP_CODE="$(curl -s -o /dev/null -w "%{http_code}" -m 5 "${SERVER_URL}" 2>/dev/null || echo "000")"
+if [[ "${SERVER_HTTP_CODE}" =~ ^(200|301|302|304|404)$ ]]; then
+  print_pass "Server Reachability" "HTTP ${SERVER_HTTP_CODE} at ${SERVER_URL}"
+else
+  print_warn "Server Reachability" "Server returned HTTP ${SERVER_HTTP_CODE} (offline fallback will engage)"
+fi
+
+# 9. HLS Master Stream Verification Check
+HLS_MASTER_URL="${SERVER_URL}/hls/${STREAM_KEY}/master.m3u8"
+HLS_RESP="$(curl -s -m 6 "${HLS_MASTER_URL}" 2>/dev/null || echo "")"
+HLS_FOUND=0
+VERIFIED_ENDPOINT=""
+
+if echo "${HLS_RESP}" | grep -q "#EXTM3U"; then
+  HLS_FOUND=1
+  VERIFIED_ENDPOINT="${HLS_MASTER_URL}"
+  # Parse referenced child variant playlist if present
+  CHILD_PATH="$(echo "${HLS_RESP}" | grep -v '^#' | grep -E '\.m3u8' | head -n1 || echo '')"
+  if [[ -n "${CHILD_PATH}" ]]; then
+    if [[ "${CHILD_PATH}" =~ ^https?:// ]]; then
+      CHILD_URL="${CHILD_PATH}"
+    else
+      CHILD_URL="${SERVER_URL}/hls/${STREAM_KEY}/${CHILD_PATH}"
+    fi
+    CHILD_RESP="$(curl -s -m 5 "${CHILD_URL}" 2>/dev/null || echo "")"
+    if echo "${CHILD_RESP}" | grep -q "#EXTM3U"; then
+      VERIFIED_ENDPOINT="${VERIFIED_ENDPOINT} (Variant stream verified)"
+    fi
+  fi
+else
+  # Check alternative candidate endpoints
+  HLS_ALT_URL="${SERVER_URL}/hls/${CHANNEL_NAME}/master.m3u8"
+  HLS_ALT_RESP="$(curl -s -m 6 "${HLS_ALT_URL}" 2>/dev/null || echo "")"
+  if echo "${HLS_ALT_RESP}" | grep -q "#EXTM3U"; then
+    HLS_FOUND=1
+    VERIFIED_ENDPOINT="${HLS_ALT_URL}"
+  fi
+fi
+
+if (( HLS_FOUND == 1 )); then
+  print_pass "HLS Master Stream" "Verified live stream: ${VERIFIED_ENDPOINT}"
+else
+  print_warn "HLS Master Stream" "Broadcast is currently idle (offline logo loop active)"
+fi
+
+# 10. Local HLS.js Library Check (Must be local, non-empty, zero CDN runtime dependency)
+HLS_JS_FILE="/opt/streampulse/logo/hls.min.js"
+if [[ -s "${HLS_JS_FILE}" ]]; then
+  HLS_JS_SIZE="$(wc -c < "${HLS_JS_FILE}" | tr -d ' ')"
+  print_pass "Local HLS.js Engine" "${HLS_JS_FILE} (${HLS_JS_SIZE} bytes)"
+else
+  print_fail "Local HLS.js Engine" "${HLS_JS_FILE} missing or empty"
+fi
+
+# 11. Browser Binary Check
 BROWSER_BIN="$(command -v chromium || command -v chromium-browser || command -v google-chrome || command -v firefox || echo '')"
 if [[ -n "${BROWSER_BIN}" ]]; then
-  print_pass "Browser Installed" "${BROWSER_BIN}"
+  print_pass "Browser Binary" "${BROWSER_BIN}"
 else
-  print_fail "Browser Installed" "No supported browser binary found"
+  print_fail "Browser Binary" "No supported browser binary found"
 fi
 
-# 8. Dedicated Profile Check
+# 12. Dedicated Profile Directory Check
 PROFILE_DIR="${BROWSER_PROFILE_DIR:-/opt/streampulse/chromium-profile}"
 if [[ -d "${PROFILE_DIR}" ]]; then
   print_pass "Dedicated Profile" "${PROFILE_DIR} ready"
@@ -1528,93 +1976,76 @@ else
   print_fail "Dedicated Profile" "${PROFILE_DIR} missing"
 fi
 
-# 9. Keyring Suppression Flag Check
+# 13. Keyring Suppression Flag Check
 if [[ -f /opt/streampulse/bin/streampulse-player.sh ]] && grep -q -- "--password-store=basic" /opt/streampulse/bin/streampulse-player.sh; then
-  print_pass "Keyring Suppression" "--password-store=basic properly inside launcher"
+  print_pass "Keyring Suppression" "--password-store=basic registered in launcher"
 else
   print_fail "Keyring Suppression" "--password-store=basic not found in player launcher"
 fi
 
-# 10. Authoritative Player Launcher Check
+# 14. Authoritative Player Launcher Check
 if [[ -x /opt/streampulse/bin/streampulse-player.sh ]]; then
-  print_pass "Player Launcher" "streampulse-player.sh executable"
+  print_pass "Player Launcher" "/opt/streampulse/bin/streampulse-player.sh executable"
 else
-  print_fail "Player Launcher" "streampulse-player.sh missing or not executable"
+  print_fail "Player Launcher" "/opt/streampulse/bin/streampulse-player.sh missing or not executable"
 fi
 
-# 11. Authoritative Systemd Service Check
+# 15. Authoritative Systemd Service Registration Check
 if [[ -f /etc/systemd/system/streampulse-player.service ]]; then
-  print_pass "Playback Service" "Authoritative streampulse-player.service unit registered"
+  print_pass "Service Unit" "/etc/systemd/system/streampulse-player.service registered"
 else
-  print_fail "Playback Service" "Authoritative service unit (/etc/systemd/system/streampulse-player.service) missing"
+  print_fail "Service Unit" "/etc/systemd/system/streampulse-player.service missing"
 fi
 
-# 12. Competing Service Absence Check (Zero conflicts)
+# 16. Competing Service Conflict Absence Check
 if systemctl is-active --quiet streampulse-rpi-player.service 2>/dev/null; then
   print_fail "Conflict Prevention" "Competing streampulse-rpi-player.service is active"
 else
-  print_pass "Conflict Prevention" "No competing playback service active"
+  print_pass "Conflict Prevention" "Zero conflicting legacy services active"
 fi
 
-# 13. Process Lock Implementation Check
+# 17. Process Lock Implementation Check
 if [[ -f /opt/streampulse/bin/streampulse-player.sh ]] && grep -q "flock" /opt/streampulse/bin/streampulse-player.sh; then
   print_pass "Duplicate Lock" "Process lock (flock) active in launcher"
 else
-  print_fail "Duplicate Lock" "flock locking missing in streampulse-player.sh"
+  print_fail "Duplicate Lock" "flock locking missing in launcher"
 fi
 
-# 14. Assigned Channel Check
-PLAYER_CONF="/opt/streampulse/config/player.conf"
-if [[ -f "${PLAYER_CONF}" ]]; then
-  source "${PLAYER_CONF}"
-  if [[ -n "${CHANNEL_NAME:-}" ]]; then
-    print_pass "Assigned Channel" "Channel: '${CHANNEL_NAME}'"
-  else
-    print_fail "Assigned Channel" "CHANNEL_NAME empty in player.conf"
-  fi
-else
-  print_fail "Assigned Channel" "player.conf missing"
-fi
-
-# 15. Common Logo Folder Check
+# 18. Common Logo Assets & Player HTML Check
 LOGO_DIR="/opt/streampulse/logo"
-if [[ -d "${LOGO_DIR}" ]]; then
-  print_pass "Common Logo Folder" "${LOGO_DIR} verified"
+if [[ -s "${LOGO_DIR}/player.html" ]]; then
+  print_pass "Player HTML" "${LOGO_DIR}/player.html ready"
 else
-  print_fail "Common Logo Folder" "${LOGO_DIR} missing"
+  print_fail "Player HTML" "${LOGO_DIR}/player.html missing or empty"
 fi
 
-# 16. Common Logo Media & HTML Player Check
-if [[ -f "${LOGO_DIR}/player.html" ]] && ([[ -f "${LOGO_DIR}/motion-logo.mp4" ]] || [[ -f "${LOGO_DIR}/logo-fallback.html" ]]); then
-  print_pass "Integrated Media" "Offline video/HTML assets ready"
-else
-  print_warn "Integrated Media" "Assets check: player.html ready"
-fi
-
-# 17. Streaming Configuration Check
-if [[ -f "${PLAYER_CONF}" ]] && grep -q '^STREAM_KEY=' "${PLAYER_CONF}"; then
-  print_pass "Streaming Config" "STREAM_KEY and SERVER_URL registered securely"
-else
-  print_fail "Streaming Config" "Streaming credentials missing from ${PLAYER_CONF}"
-fi
-
-# 18. Auto-Start & Reboot Persistence Check
+# 19. Reboot Persistence & Service Auto-Start Check
 if systemctl is-enabled streampulse-player.service >/dev/null 2>&1; then
   print_pass "Reboot Persistence" "streampulse-player.service ENABLED on boot"
 else
-  print_warn "Reboot Persistence" "Playback service not yet enabled"
+  print_warn "Reboot Persistence" "streampulse-player.service not enabled"
+fi
+
+# 20. Authoritative Service Active Status Check
+if systemctl is-active --quiet streampulse-player.service 2>/dev/null; then
+  print_pass "Playback Service" "streampulse-player.service ACTIVE (Running)"
+elif systemctl is-enabled --quiet streampulse-player.service 2>/dev/null; then
+  print_warn "Playback Service" "streampulse-player.service is ENABLED (Waiting for display trigger)"
+else
+  print_fail "Playback Service" "streampulse-player.service is INACTIVE/FAILED"
 fi
 
 echo "----------------------------------------------------------------------"
-echo "Validation: Passed: ${PASSED_CHECKS}/${TOTAL_CHECKS} | Failed: ${FAILED_CHECKS} | Warnings: ${WARNINGS}"
+echo "Validation Summary: Passed: ${PASSED_CHECKS}/${TOTAL_CHECKS} | Failed: ${FAILED_CHECKS} | Warnings: ${WARNINGS}"
 
 if (( FAILED_CHECKS == 0 )); then
   echo -e "\e[32m[SUCCESS] All critical StreamPulse components validated successfully!\e[0m"
   exit 0
 else
-  echo -e "\e[31m[ERROR] Validation encountered ${FAILED_CHECKS} failure(s).\e[0m" >&2
+  echo -e "\e[31m[ERROR] Validation encountered ${FAILED_CHECKS} critical failure(s).\e[0m" >&2
   exit 1
 fi
+
 EOF_VALIDATE
 
 chmod +x /opt/streampulse/bin/*.sh
@@ -1697,17 +2128,31 @@ chown -R "${TARGET_USER}:${TARGET_GID}" /opt/streampulse/chromium-profile \
 # 14. Restart / Start Authoritative Playback Service
 # ------------------------------------------------------------------------------
 echo "[+] Starting single authoritative streampulse-player.service..."
-systemctl restart streampulse-player.service 2>/dev/null || true
+if ! systemctl restart streampulse-player.service; then
+  echo -e "\e[31m[FAIL] Failed to start streampulse-player.service!\e[0m" >&2
+  systemctl status streampulse-player.service --no-pager -l || true
+  journalctl -u streampulse-player.service -n 30 --no-pager || true
+  exit 1
+fi
+
+sleep 2
+if ! systemctl is-active --quiet streampulse-player.service && ! systemctl is-enabled --quiet streampulse-player.service; then
+  echo -e "\e[31m[FAIL] streampulse-player.service is neither active nor enabled!\e[0m" >&2
+  exit 1
+fi
 
 # ------------------------------------------------------------------------------
-# 15. 18-Point Automated Validation Matrix
+# 15. Automated Validation Matrix
 # ------------------------------------------------------------------------------
 if (( RUN_VALIDATION == 1 )) && [[ -x "/opt/streampulse/bin/validate.sh" ]]; then
   echo ""
   echo "----------------------------------------------------------------------"
-  echo "Running 18-Point StreamPulse Universal Validation Suite..."
+  echo "Running StreamPulse Universal Validation Suite..."
   echo "----------------------------------------------------------------------"
-  /opt/streampulse/bin/validate.sh || true
+  if ! /opt/streampulse/bin/validate.sh; then
+    echo -e "\e[31m[FAIL] StreamPulse installation validation failed!\e[0m" >&2
+    exit 1
+  fi
 fi
 
 echo ""

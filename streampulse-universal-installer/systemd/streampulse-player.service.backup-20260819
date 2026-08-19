@@ -1,0 +1,27 @@
+[Unit]
+Description=StreamPulse Authoritative Fullscreen Player Service
+Documentation=https://streampulse.io
+After=network-online.target sound.target graphical-session.target graphical.target
+Wants=network-online.target
+Conflicts=streampulse-rpi-player.service
+
+[Service]
+Type=simple
+User=DETECTED_USER
+Group=DETECTED_GROUP
+WorkingDirectory=/opt/streampulse
+Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=/run/user/DETECTED_UID
+Environment=HOME=/home/DETECTED_USER
+ExecStartPre=/bin/sleep 2
+ExecStart=/opt/streampulse/bin/streampulse-player.sh
+Restart=always
+RestartSec=3
+KillMode=mixed
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical.target default.target

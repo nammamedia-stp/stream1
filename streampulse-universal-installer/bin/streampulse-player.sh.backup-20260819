@@ -56,55 +56,24 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Server Endpoint:  ${SERVER_UR
 echo "======================================================================"
 
 # ------------------------------------------------------------------------------
-# ------------------------------------------------------------------------------
 # 4. Environment & Display Resolution
 # ------------------------------------------------------------------------------
-CURRENT_UID="$(id -u)"
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/${CURRENT_UID}}"
-export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
 export DISPLAY="${DISPLAY:-:0}"
+if [[ -z "${WAYLAND_DISPLAY:-}" ]] && [[ -e "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/wayland-0" ]]; then
+  export WAYLAND_DISPLAY="wayland-0"
+fi
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
 # ------------------------------------------------------------------------------
-# 5. Wait for Graphical Display / Compositor (Strict Wayland & Labwc Validation)
+# 5. Wait for Graphical Display / Compositor
 # ------------------------------------------------------------------------------
-MAX_DISPLAY_WAIT=60
+MAX_DISPLAY_WAIT=30
 DISPLAY_WAITED=0
-WAYLAND_SOCKET="${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY}"
-
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Waiting for Wayland / Labwc display session readiness..."
-
-while true; do
-  SOCKET_READY=0
-  COMPOSITOR_READY=0
-
-  if [[ -S "${WAYLAND_SOCKET}" ]] || [[ -e "${WAYLAND_SOCKET}" ]]; then
-    SOCKET_READY=1
-  fi
-
-  if pgrep -u "${CURRENT_UID}" -x labwc >/dev/null 2>&1 || pgrep -x labwc >/dev/null 2>&1 || pgrep -u "${CURRENT_UID}" -x wayfire >/dev/null 2>&1 || pgrep -x Xorg >/dev/null 2>&1 || [[ -S "/tmp/.X11-unix/X0" ]]; then
-    COMPOSITOR_READY=1
-  fi
-
-  if (( SOCKET_READY == 1 && COMPOSITOR_READY == 1 )); then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Graphical display session confirmed ready (Socket: ${WAYLAND_SOCKET}, Compositor: active) after ${DISPLAY_WAITED}s."
-    break
-  fi
-
-  # Fallback check for X11 / Xwayland if xset succeeds
-  if command -v xset >/dev/null 2>&1 && xset q >/dev/null 2>&1; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Display verified ready via xset after ${DISPLAY_WAITED}s."
-    break
-  fi
-
+while ! (wlr-randr >/dev/null 2>&1 || xset q >/dev/null 2>&1 || [[ -n "${WAYLAND_DISPLAY:-}" ]] || [[ -n "${DISPLAY:-}" ]]); do
   if (( DISPLAY_WAITED >= MAX_DISPLAY_WAIT )); then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] ERROR: Graphical display / Wayland session failed to become ready after ${MAX_DISPLAY_WAIT}s. Exiting." >&2
-    exit 1
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Display check timed out, continuing launch attempt..."
+    break
   fi
-
-  if (( DISPLAY_WAITED % 5 == 0 && DISPLAY_WAITED > 0 )); then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [StreamPulse] Waiting for Wayland socket & compositor (${DISPLAY_WAITED}/${MAX_DISPLAY_WAIT}s)..."
-  fi
-
   sleep 1
   (( DISPLAY_WAITED++ ))
 done

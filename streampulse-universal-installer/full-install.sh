@@ -328,27 +328,11 @@ mkdir -p /opt/streampulse/bin \
          /opt/streampulse/chromium-profile
 
 # ------------------------------------------------------------------------------
-# 7. Common Logo Assets (Permanent across ALL Pis - Never Deleted)
+# 7. Common Logo Assets & Offline Visual Fallback
 # ------------------------------------------------------------------------------
 echo "[+] Setting up Common Logo Assets (/opt/streampulse/logo)..."
 
-USER_DOWNLOAD_LOGO="${USER_HOME}/Downloads/Motion Logo.mp4"
-USER_DOWNLOAD_LOGO_ALT="${USER_HOME}/Downloads/motion_logo.mp4"
-
-if [[ ! -f "/opt/streampulse/logo/motion-logo.mp4" ]]; then
-  if [[ -f "${USER_DOWNLOAD_LOGO}" ]] && [[ -s "${USER_DOWNLOAD_LOGO}" ]]; then
-    echo "  -> Found local Motion Logo in ${USER_DOWNLOAD_LOGO}. Copying..."
-    cp "${USER_DOWNLOAD_LOGO}" "/opt/streampulse/logo/motion-logo.mp4"
-  elif [[ -f "${USER_DOWNLOAD_LOGO_ALT}" ]] && [[ -s "${USER_DOWNLOAD_LOGO_ALT}" ]]; then
-    echo "  -> Found local Motion Logo in ${USER_DOWNLOAD_LOGO_ALT}. Copying..."
-    cp "${USER_DOWNLOAD_LOGO_ALT}" "/opt/streampulse/logo/motion-logo.mp4"
-  else
-    echo "  -> Attempting download of default StreamPulse Motion Logo..."
-    curl -s -f -m 15 "${SERVER_URL}/api/rpi-player/motion-logo" -o /opt/streampulse/logo/motion-logo.mp4 2>/dev/null || true
-  fi
-fi
-
-# Create HTML Fallback
+# 1. Guaranteed Mandatory Offline Visual Fallback (Self-contained CSS/SVG animated canvas)
 cat << 'HTML' > /opt/streampulse/logo/logo-fallback.html
 <!DOCTYPE html>
 <html lang="en">
@@ -462,6 +446,43 @@ cat << 'HTML' > /opt/streampulse/logo/logo-fallback.html
 </body>
 </html>
 HTML
+
+chmod 644 /opt/streampulse/logo/logo-fallback.html
+if [[ ! -s /opt/streampulse/logo/logo-fallback.html ]]; then
+  echo -e "\e[31m[FAIL] Failed to create mandatory /opt/streampulse/logo/logo-fallback.html\e[0m" >&2
+  exit 1
+fi
+echo "  -> Guaranteed offline fallback created: /opt/streampulse/logo/logo-fallback.html"
+
+# 2. Check for optional Motion Logo MP4 (User local file or Server API)
+USER_DOWNLOAD_LOGO="${USER_HOME}/Downloads/Motion Logo.mp4"
+USER_DOWNLOAD_LOGO_ALT="${USER_HOME}/Downloads/motion_logo.mp4"
+
+if [[ -f "${USER_DOWNLOAD_LOGO}" ]] && [[ -s "${USER_DOWNLOAD_LOGO}" ]]; then
+  echo "  -> Found local Motion Logo in ${USER_DOWNLOAD_LOGO}. Copying..."
+  cp "${USER_DOWNLOAD_LOGO}" "/opt/streampulse/logo/motion-logo.mp4"
+  chmod 644 "/opt/streampulse/logo/motion-logo.mp4"
+elif [[ -f "${USER_DOWNLOAD_LOGO_ALT}" ]] && [[ -s "${USER_DOWNLOAD_LOGO_ALT}" ]]; then
+  echo "  -> Found local Motion Logo in ${USER_DOWNLOAD_LOGO_ALT}. Copying..."
+  cp "${USER_DOWNLOAD_LOGO_ALT}" "/opt/streampulse/logo/motion-logo.mp4"
+  chmod 644 "/opt/streampulse/logo/motion-logo.mp4"
+elif [[ -f "/opt/streampulse/logo/motion-logo.mp4" ]] && [[ -s "/opt/streampulse/logo/motion-logo.mp4" ]]; then
+  echo "  -> Preserving existing /opt/streampulse/logo/motion-logo.mp4"
+else
+  echo "  -> Checking server for optional Motion Logo MP4 asset..."
+  if curl -fsSL --connect-timeout 5 --max-time 15 "${SERVER_URL}/api/rpi-player/motion-logo" -o /opt/streampulse/logo/motion-logo.mp4 2>/dev/null; then
+    if [[ -s "/opt/streampulse/logo/motion-logo.mp4" ]]; then
+      echo "  -> Successfully downloaded optional Motion Logo MP4 from server."
+      chmod 644 "/opt/streampulse/logo/motion-logo.mp4"
+    else
+      rm -f /opt/streampulse/logo/motion-logo.mp4
+      echo "  -> Optional Motion Logo MP4 not found on server (Guaranteed HTML5 fallback active)."
+    fi
+  else
+    rm -f /opt/streampulse/logo/motion-logo.mp4 2>/dev/null
+    echo "  -> Optional Motion Logo MP4 not found on server (Guaranteed HTML5 fallback active)."
+  fi
+fi
 
 # Create Self-Contained Standalone Universal Kiosk Player (Single Unified Display Surface)
 cat << 'HTML' > /opt/streampulse/logo/player.html
@@ -901,8 +922,10 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
         currentState = 'STANDBY';
         console.log('[StreamPulse Player] [STREAM OFFLINE] Entering STANDBY state. Reason:', reason || 'Stream Dropped');
 
-        // Stop stalled watchdog while offline
+        // Stop stalled watchdog while offline and reset stall counters
         stopStallWatchdog();
+        stallCount = 0;
+        consecutiveHlsFailures = 0;
 
         // 1. Destroy active HLS instance
         if (hlsInstance) {
@@ -926,7 +949,7 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
         // 4. Update status overlay
         updateStatus('offline', 'Stream Offline • Logo Active', 'Channel: ' + channelName, 0);
 
-        // 5. Resume background polling for HLS
+        // 5. Resume background polling for HLS (Zero page reload needed)
         startStreamPolling();
       }
 
@@ -959,20 +982,15 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
               try { hlsInstance.recoverMediaError(); safePlay(liveVideo); } catch(e) {}
             }
 
-            // Hierarchy Level 3: If stalled for > 4 ticks, recreate HLS instance
+            // Hierarchy Level 3: If stalled for >= 4 ticks, gracefully fallback to offline logo + polling
+            // NEVER trigger a page reload for normal stream stalls or stream dropouts!
             if (stallCount >= 4) {
-              console.warn('[StreamPulse Player] [HLS RECREATION] Stalled watchdog recreating HLS instance...');
-              consecutiveHlsFailures++;
-              if (consecutiveHlsFailures >= 5) {
-                triggerControlledReload('Persistent Stalled Playback');
-                return;
-              }
-              const currentUrl = activeHlsUrl;
+              console.warn('[StreamPulse Player] [STREAM DISCONNECTED] Watchdog switching to offline logo + stream polling...');
               if (hlsInstance) {
                 try { hlsInstance.destroy(); } catch(e) {}
                 hlsInstance = null;
               }
-              switchToOfflineStandby('Watchdog Stalled Recovery');
+              switchToOfflineStandby('Stream Inactive / Stalled');
               return;
             }
           } else {
@@ -1049,31 +1067,22 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
             console.warn('[StreamPulse Player] [HLS ERROR] Event error: type=' + data.type + ', details=' + data.details + ', fatal=' + data.fatal);
 
             if (data.fatal) {
-              consecutiveHlsFailures++;
               if (data.type === window.Hls.ErrorTypes.MEDIA_ERROR) {
                 console.log('[StreamPulse Player] [HLS RECOVERY] Fatal media error encountered. Invoking recoverMediaError()...');
                 try {
                   hlsInstance.recoverMediaError();
                   safePlay(liveVideo);
                 } catch (e) {
-                  console.warn('[StreamPulse Player] [HLS RECOVERY] recoverMediaError failed. Switching to offline standby.');
-                  if (consecutiveHlsFailures >= 5) {
-                    triggerControlledReload('Fatal Media Error Exhaustion');
-                  } else {
-                    switchToOfflineStandby('Media Error Unrecoverable');
-                  }
+                  console.warn('[StreamPulse Player] [HLS RECOVERY] recoverMediaError failed. Gracefully falling back to logo.');
+                  switchToOfflineStandby('Media Error Unrecoverable');
                 }
               } else if (data.type === window.Hls.ErrorTypes.NETWORK_ERROR) {
-                // Manifest / Fragment 404 or stream offline
-                console.log('[StreamPulse Player] [HLS ERROR] Fatal network/404 error. Returning to offline logo + polling.');
-                switchToOfflineStandby('Stream Endpoint Returned Error/404');
+                // Stream was stopped by broadcaster (Manifest or Fragment 404)
+                console.log('[StreamPulse Player] [HLS OFFLINE] Stream network/404 received. Returning to offline logo + polling.');
+                switchToOfflineStandby('Stream Endpoint Returned 404/Offline');
               } else {
-                console.warn('[StreamPulse Player] [HLS ERROR] Other fatal HLS error encountered.');
-                if (consecutiveHlsFailures >= 5) {
-                  triggerControlledReload('Repeated Fatal HLS Errors');
-                } else {
-                  switchToOfflineStandby('Fatal HLS Error');
-                }
+                console.warn('[StreamPulse Player] [HLS OTHER ERROR] Other fatal error. Falling back to logo.');
+                switchToOfflineStandby('Fatal HLS Error');
               }
             }
           });
@@ -2011,12 +2020,20 @@ else
   print_fail "Duplicate Lock" "flock locking missing in launcher"
 fi
 
-# 18. Common Logo Assets & Player HTML Check
+# 18. Common Logo Assets & Player Display Verification
 LOGO_DIR="/opt/streampulse/logo"
-if [[ -s "${LOGO_DIR}/player.html" ]]; then
-  print_pass "Player HTML" "${LOGO_DIR}/player.html ready"
+if [[ -s "${LOGO_DIR}/player.html" ]] && [[ -s "${LOGO_DIR}/logo-fallback.html" ]] && [[ -s "${LOGO_DIR}/hls.min.js" ]]; then
+  if [[ -s "${LOGO_DIR}/motion-logo.mp4" ]]; then
+    print_pass "Offline Visuals" "player.html + logo-fallback.html + hls.min.js + motion-logo.mp4 (All Ready)"
+  else
+    print_pass "Offline Visuals" "player.html + logo-fallback.html + hls.min.js (Guaranteed HTML5 fallback active, MP4 optional)"
+  fi
 else
-  print_fail "Player HTML" "${LOGO_DIR}/player.html missing or empty"
+  MISSING_ASSETS=""
+  [[ ! -s "${LOGO_DIR}/player.html" ]] && MISSING_ASSETS="${MISSING_ASSETS} player.html"
+  [[ ! -s "${LOGO_DIR}/logo-fallback.html" ]] && MISSING_ASSETS="${MISSING_ASSETS} logo-fallback.html"
+  [[ ! -s "${LOGO_DIR}/hls.min.js" ]] && MISSING_ASSETS="${MISSING_ASSETS} hls.min.js"
+  print_fail "Offline Visuals" "Missing mandatory assets in ${LOGO_DIR}:${MISSING_ASSETS}"
 fi
 
 # 19. Reboot Persistence & Service Auto-Start Check

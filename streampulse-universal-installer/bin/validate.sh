@@ -211,12 +211,20 @@ else
   print_fail "Duplicate Lock" "flock locking missing in launcher"
 fi
 
-# 18. Common Logo Assets & Player HTML Check
+# 18. Common Logo Assets & Player Display Verification
 LOGO_DIR="/opt/streampulse/logo"
-if [[ -s "${LOGO_DIR}/player.html" ]]; then
-  print_pass "Player HTML" "${LOGO_DIR}/player.html ready"
+if [[ -s "${LOGO_DIR}/player.html" ]] && [[ -s "${LOGO_DIR}/logo-fallback.html" ]] && [[ -s "${LOGO_DIR}/hls.min.js" ]]; then
+  if [[ -s "${LOGO_DIR}/motion-logo.mp4" ]]; then
+    print_pass "Offline Visuals" "player.html + logo-fallback.html + hls.min.js + motion-logo.mp4 (All Ready)"
+  else
+    print_pass "Offline Visuals" "player.html + logo-fallback.html + hls.min.js (Guaranteed HTML5 fallback active, MP4 optional)"
+  fi
 else
-  print_fail "Player HTML" "${LOGO_DIR}/player.html missing or empty"
+  MISSING_ASSETS=""
+  [[ ! -s "${LOGO_DIR}/player.html" ]] && MISSING_ASSETS="${MISSING_ASSETS} player.html"
+  [[ ! -s "${LOGO_DIR}/logo-fallback.html" ]] && MISSING_ASSETS="${MISSING_ASSETS} logo-fallback.html"
+  [[ ! -s "${LOGO_DIR}/hls.min.js" ]] && MISSING_ASSETS="${MISSING_ASSETS} hls.min.js"
+  print_fail "Offline Visuals" "Missing mandatory assets in ${LOGO_DIR}:${MISSING_ASSETS}"
 fi
 
 # 19. Reboot Persistence & Service Auto-Start Check

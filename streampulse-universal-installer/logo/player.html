@@ -434,8 +434,10 @@
         currentState = 'STANDBY';
         console.log('[StreamPulse Player] [STREAM OFFLINE] Entering STANDBY state. Reason:', reason || 'Stream Dropped');
 
-        // Stop stalled watchdog while offline
+        // Stop stalled watchdog while offline and reset stall counters
         stopStallWatchdog();
+        stallCount = 0;
+        consecutiveHlsFailures = 0;
 
         // 1. Destroy active HLS instance
         if (hlsInstance) {
@@ -459,7 +461,7 @@
         // 4. Update status overlay
         updateStatus('offline', 'Stream Offline • Logo Active', 'Channel: ' + channelName, 0);
 
-        // 5. Resume background polling for HLS
+        // 5. Resume background polling for HLS (Zero page reload needed)
         startStreamPolling();
       }
 
@@ -492,20 +494,15 @@
               try { hlsInstance.recoverMediaError(); safePlay(liveVideo); } catch(e) {}
             }
 
-            // Hierarchy Level 3: If stalled for > 4 ticks, recreate HLS instance
+            // Hierarchy Level 3: If stalled for >= 4 ticks, gracefully fallback to offline logo + polling
+            // NEVER trigger a page reload for normal stream stalls or stream dropouts!
             if (stallCount >= 4) {
-              console.warn('[StreamPulse Player] [HLS RECREATION] Stalled watchdog recreating HLS instance...');
-              consecutiveHlsFailures++;
-              if (consecutiveHlsFailures >= 5) {
-                triggerControlledReload('Persistent Stalled Playback');
-                return;
-              }
-              const currentUrl = activeHlsUrl;
+              console.warn('[StreamPulse Player] [STREAM DISCONNECTED] Watchdog switching to offline logo + stream polling...');
               if (hlsInstance) {
                 try { hlsInstance.destroy(); } catch(e) {}
                 hlsInstance = null;
               }
-              switchToOfflineStandby('Watchdog Stalled Recovery');
+              switchToOfflineStandby('Stream Inactive / Stalled');
               return;
             }
           } else {
@@ -582,31 +579,22 @@
             console.warn('[StreamPulse Player] [HLS ERROR] Event error: type=' + data.type + ', details=' + data.details + ', fatal=' + data.fatal);
 
             if (data.fatal) {
-              consecutiveHlsFailures++;
               if (data.type === window.Hls.ErrorTypes.MEDIA_ERROR) {
                 console.log('[StreamPulse Player] [HLS RECOVERY] Fatal media error encountered. Invoking recoverMediaError()...');
                 try {
                   hlsInstance.recoverMediaError();
                   safePlay(liveVideo);
                 } catch (e) {
-                  console.warn('[StreamPulse Player] [HLS RECOVERY] recoverMediaError failed. Switching to offline standby.');
-                  if (consecutiveHlsFailures >= 5) {
-                    triggerControlledReload('Fatal Media Error Exhaustion');
-                  } else {
-                    switchToOfflineStandby('Media Error Unrecoverable');
-                  }
+                  console.warn('[StreamPulse Player] [HLS RECOVERY] recoverMediaError failed. Gracefully falling back to logo.');
+                  switchToOfflineStandby('Media Error Unrecoverable');
                 }
               } else if (data.type === window.Hls.ErrorTypes.NETWORK_ERROR) {
-                // Manifest / Fragment 404 or stream offline
-                console.log('[StreamPulse Player] [HLS ERROR] Fatal network/404 error. Returning to offline logo + polling.');
-                switchToOfflineStandby('Stream Endpoint Returned Error/404');
+                // Stream was stopped by broadcaster (Manifest or Fragment 404)
+                console.log('[StreamPulse Player] [HLS OFFLINE] Stream network/404 received. Returning to offline logo + polling.');
+                switchToOfflineStandby('Stream Endpoint Returned 404/Offline');
               } else {
-                console.warn('[StreamPulse Player] [HLS ERROR] Other fatal HLS error encountered.');
-                if (consecutiveHlsFailures >= 5) {
-                  triggerControlledReload('Repeated Fatal HLS Errors');
-                } else {
-                  switchToOfflineStandby('Fatal HLS Error');
-                }
+                console.warn('[StreamPulse Player] [HLS OTHER ERROR] Other fatal error. Falling back to logo.');
+                switchToOfflineStandby('Fatal HLS Error');
               }
             }
           });

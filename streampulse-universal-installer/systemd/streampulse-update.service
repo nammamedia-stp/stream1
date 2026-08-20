@@ -1,0 +1,17 @@
+[Unit]
+Description=StreamPulse Lightweight Auto-Update Check on Boot
+Documentation=https://streampulse.io
+After=network-online.target
+Wants=network-online.target
+Before=streampulse-player.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/streampulse/bin/streampulse-update.sh
+TimeoutSec=45
+StandardOutput=journal
+StandardError=journal
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target graphical.target

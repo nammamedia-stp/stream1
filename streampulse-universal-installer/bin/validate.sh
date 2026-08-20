@@ -7,7 +7,7 @@
 
 set -uo pipefail
 
-TOTAL_CHECKS=20
+TOTAL_CHECKS=24
 PASSED_CHECKS=0
 FAILED_CHECKS=0
 WARNINGS=0
@@ -24,7 +24,6 @@ print_warn() {
   local detail="${2:-}"
   echo -e "\e[33m[WARN]\e[0m ${title} \e[33m(${detail})\e[0m"
   (( WARNINGS++ ))
-  (( PASSED_CHECKS++ ))
 }
 
 print_fail() {
@@ -211,30 +210,72 @@ else
   print_fail "Duplicate Lock" "flock locking missing in launcher"
 fi
 
-# 18. Common Logo Assets & Player Display Verification
+# 18. Local Source & Installed Motion Logo Asset Check
 LOGO_DIR="/opt/streampulse/logo"
-if [[ -s "${LOGO_DIR}/player.html" ]] && [[ -s "${LOGO_DIR}/logo-fallback.html" ]] && [[ -s "${LOGO_DIR}/hls.min.js" ]]; then
-  if [[ -s "${LOGO_DIR}/motion-logo.mp4" ]]; then
-    print_pass "Offline Visuals" "player.html + logo-fallback.html + hls.min.js + motion-logo.mp4 (All Ready)"
+USER_DL_1="${USER_HOME}/Downloads/Motion Logo.mp4"
+USER_DL_2="${USER_HOME}/Downloads/motion_logo.mp4"
+
+# Check Source in Downloads
+if [[ -f "${USER_DL_1}" ]] && [[ -s "${USER_DL_1}" ]]; then
+  SRC_SIZE=$(stat -c%s "${USER_DL_1}" 2>/dev/null || wc -c < "${USER_DL_1}" || echo 0)
+  print_pass "Motion Logo Source" "${USER_DL_1} (size=${SRC_SIZE} bytes)"
+elif [[ -f "${USER_DL_2}" ]] && [[ -s "${USER_DL_2}" ]]; then
+  SRC_SIZE=$(stat -c%s "${USER_DL_2}" 2>/dev/null || wc -c < "${USER_DL_2}" || echo 0)
+  print_pass "Motion Logo Source" "${USER_DL_2} (size=${SRC_SIZE} bytes)"
+else
+  print_warn "Motion Logo Source" "No local Motion Logo found in ~/Downloads/ (will check installed/fallback)"
+fi
+
+# Check Installed /opt/streampulse/logo/motion-logo.mp4
+if [[ -f "${LOGO_DIR}/motion-logo.mp4" ]] && [[ -s "${LOGO_DIR}/motion-logo.mp4" ]]; then
+  INSTALLED_SIZE=$(stat -c%s "${LOGO_DIR}/motion-logo.mp4" 2>/dev/null || wc -c < "${LOGO_DIR}/motion-logo.mp4" || echo 0)
+  if [[ -r "${LOGO_DIR}/motion-logo.mp4" ]]; then
+    print_pass "Installed Motion Logo" "${LOGO_DIR}/motion-logo.mp4 (size=${INSTALLED_SIZE} bytes, readable by ${TARGET_USER})"
   else
-    print_pass "Offline Visuals" "player.html + logo-fallback.html + hls.min.js (Guaranteed HTML5 fallback active, MP4 optional)"
+    print_fail "Installed Motion Logo" "${LOGO_DIR}/motion-logo.mp4 exists but not readable by ${TARGET_USER}"
   fi
+else
+  if [[ -s "${LOGO_DIR}/logo-fallback.html" ]]; then
+    print_pass "Installed Motion Logo" "Guaranteed HTML5 fallback active (${LOGO_DIR}/logo-fallback.html, MP4 optional)"
+  else
+    print_fail "Installed Motion Logo" "Neither motion-logo.mp4 nor logo-fallback.html found in ${LOGO_DIR}"
+  fi
+fi
+
+# 19. Player HTML & Local Engine Verification
+if [[ -s "${LOGO_DIR}/player.html" ]] && grep -q "motion-logo.mp4" "${LOGO_DIR}/player.html" && [[ -s "${LOGO_DIR}/hls.min.js" ]]; then
+  print_pass "Player Display Core" "player.html (with motion-logo.mp4 + hls.min.js verified)"
 else
   MISSING_ASSETS=""
   [[ ! -s "${LOGO_DIR}/player.html" ]] && MISSING_ASSETS="${MISSING_ASSETS} player.html"
-  [[ ! -s "${LOGO_DIR}/logo-fallback.html" ]] && MISSING_ASSETS="${MISSING_ASSETS} logo-fallback.html"
+  ! grep -q "motion-logo.mp4" "${LOGO_DIR}/player.html" 2>/dev/null && MISSING_ASSETS="${MISSING_ASSETS} (motion-logo.mp4 reference in player.html)"
   [[ ! -s "${LOGO_DIR}/hls.min.js" ]] && MISSING_ASSETS="${MISSING_ASSETS} hls.min.js"
-  print_fail "Offline Visuals" "Missing mandatory assets in ${LOGO_DIR}:${MISSING_ASSETS}"
+  print_fail "Player Display Core" "Asset check failed: ${MISSING_ASSETS}"
 fi
 
-# 19. Reboot Persistence & Service Auto-Start Check
+# 20. Version & Auto-Update Service Check
+VERSION_FILE="/opt/streampulse/VERSION"
+if [[ -f "${VERSION_FILE}" ]]; then
+  CURR_VER="$(tr -d ' \r\n' < "${VERSION_FILE}" || echo 'unknown')"
+  print_pass "StreamPulse Version" "Version ${CURR_VER} registered (${VERSION_FILE})"
+else
+  print_warn "StreamPulse Version" "${VERSION_FILE} missing"
+fi
+
+if systemctl is-enabled streampulse-update.service >/dev/null 2>&1; then
+  print_pass "Auto-Update Engine" "streampulse-update.service ENABLED on boot"
+else
+  print_warn "Auto-Update Engine" "streampulse-update.service not enabled"
+fi
+
+# 21. Reboot Persistence & Service Auto-Start Check
 if systemctl is-enabled streampulse-player.service >/dev/null 2>&1; then
   print_pass "Reboot Persistence" "streampulse-player.service ENABLED on boot"
 else
   print_warn "Reboot Persistence" "streampulse-player.service not enabled"
 fi
 
-# 20. Authoritative Service Active Status Check
+# 22. Authoritative Service Active Status Check
 if systemctl is-active --quiet streampulse-player.service 2>/dev/null; then
   print_pass "Playback Service" "streampulse-player.service ACTIVE (Running)"
 elif systemctl is-enabled --quiet streampulse-player.service 2>/dev/null; then

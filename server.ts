@@ -4698,7 +4698,7 @@ async function startServer() {
   });
 
   // Master StreamPulse Full Installer
-  app.get('/api/rpi-player/script/full-install', async (req: any, res: any) => {
+  app.get(['/api/rpi-player/script/full-install', '/api/rpi-player/full-install.sh', '/api/rpi-player/full-install'], async (req: any, res: any) => {
     try {
       const host = (req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000').toString();
       const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.protocol === 'https' || req.secure;
@@ -4719,7 +4719,7 @@ async function startServer() {
   });
 
   // Universal StreamPulse Master Installer (Auto User Detection + Per-Pi Channel)
-  app.get('/api/rpi-player/script/universal-install', async (req: any, res: any) => {
+  app.get(['/api/rpi-player/script/universal-install', '/api/rpi-player/universal-install.sh', '/api/rpi-player/universal-install'], async (req: any, res: any) => {
     try {
       const host = (req.headers['x-forwarded-host'] || req.headers.host || '187.127.210.81').toString();
       const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.protocol === 'https' || req.secure;
@@ -4774,6 +4774,25 @@ async function startServer() {
       res.status(200).send(script);
     } catch (err: any) {
       res.status(500).send(`#!/usr/bin/env bash\necho "[ERROR] diagnose.sh generation failed: ${err.message}" >&2\nexit 1\n`);
+    }
+  });
+
+  // Version endpoint for RPi Auto-Update Engine
+  app.get('/api/rpi-player/version', async (req: any, res: any) => {
+    try {
+      const versionFile = path.resolve('./streampulse-universal-installer/VERSION');
+      let version = '2.4.0';
+      if (fs.existsSync(versionFile)) {
+        version = fs.readFileSync(versionFile, 'utf-8').trim();
+      }
+      if (req.headers.accept && req.headers.accept.includes('application/json')) {
+        res.json({ version, timestamp: new Date().toISOString() });
+      } else {
+        res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+        res.send(version);
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to retrieve version: ' + err.message });
     }
   });
 

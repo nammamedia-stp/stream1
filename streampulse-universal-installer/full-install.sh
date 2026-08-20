@@ -454,35 +454,84 @@ if [[ ! -s /opt/streampulse/logo/logo-fallback.html ]]; then
 fi
 echo "  -> Guaranteed offline fallback created: /opt/streampulse/logo/logo-fallback.html"
 
-# 2. Check for optional Motion Logo MP4 (User local file or Server API)
-USER_DOWNLOAD_LOGO="${USER_HOME}/Downloads/Motion Logo.mp4"
-USER_DOWNLOAD_LOGO_ALT="${USER_HOME}/Downloads/motion_logo.mp4"
+# 2. Local Authoritative Motion Logo Detection & Installation
+LOGO_SRC=""
+LOGO_SRC_SIZE=0
+LOGO_DEST="/opt/streampulse/logo/motion-logo.mp4"
 
-if [[ -f "${USER_DOWNLOAD_LOGO}" ]] && [[ -s "${USER_DOWNLOAD_LOGO}" ]]; then
-  echo "  -> Found local Motion Logo in ${USER_DOWNLOAD_LOGO}. Copying..."
-  cp "${USER_DOWNLOAD_LOGO}" "/opt/streampulse/logo/motion-logo.mp4"
-  chmod 644 "/opt/streampulse/logo/motion-logo.mp4"
-elif [[ -f "${USER_DOWNLOAD_LOGO_ALT}" ]] && [[ -s "${USER_DOWNLOAD_LOGO_ALT}" ]]; then
-  echo "  -> Found local Motion Logo in ${USER_DOWNLOAD_LOGO_ALT}. Copying..."
-  cp "${USER_DOWNLOAD_LOGO_ALT}" "/opt/streampulse/logo/motion-logo.mp4"
-  chmod 644 "/opt/streampulse/logo/motion-logo.mp4"
-elif [[ -f "/opt/streampulse/logo/motion-logo.mp4" ]] && [[ -s "/opt/streampulse/logo/motion-logo.mp4" ]]; then
-  echo "  -> Preserving existing /opt/streampulse/logo/motion-logo.mp4"
-else
-  echo "  -> Checking server for optional Motion Logo MP4 asset..."
-  if curl -fsSL --connect-timeout 5 --max-time 15 "${SERVER_URL}/api/rpi-player/motion-logo" -o /opt/streampulse/logo/motion-logo.mp4 2>/dev/null; then
-    if [[ -s "/opt/streampulse/logo/motion-logo.mp4" ]]; then
-      echo "  -> Successfully downloaded optional Motion Logo MP4 from server."
-      chmod 644 "/opt/streampulse/logo/motion-logo.mp4"
-    else
-      rm -f /opt/streampulse/logo/motion-logo.mp4
-      echo "  -> Optional Motion Logo MP4 not found on server (Guaranteed HTML5 fallback active)."
+# Candidate sources in strict priority order:
+CANDIDATE_PATHS=(
+  "${USER_HOME}/Downloads/Motion Logo.mp4"
+  "${USER_HOME}/Downloads/motion_logo.mp4"
+  "/home/${TARGET_USER}/Downloads/Motion Logo.mp4"
+  "/home/${TARGET_USER}/Downloads/motion_logo.mp4"
+  "${USER_HOME}/Downloads/motion-logo.mp4"
+  "${USER_HOME}/motion_logo.mp4"
+  "${USER_HOME}/Motion Logo.mp4"
+  "${LOGO_DEST}"
+)
+
+for p in "${CANDIDATE_PATHS[@]}"; do
+  if [[ -f "${p}" ]] && [[ -s "${p}" ]]; then
+    LOGO_SRC="${p}"
+    LOGO_SRC_SIZE=$(stat -c%s "${p}" 2>/dev/null || wc -c < "${p}" || echo 0)
+    break
+  fi
+done
+
+# If not found in primary user home, check all /home/*/Downloads/
+if [[ -z "${LOGO_SRC}" ]]; then
+  for p in /home/*/Downloads/"Motion Logo.mp4" /home/*/Downloads/motion_logo.mp4 /home/*/Downloads/motion-logo.mp4; do
+    if [[ -f "${p}" ]] && [[ -s "${p}" ]]; then
+      LOGO_SRC="${p}"
+      LOGO_SRC_SIZE=$(stat -c%s "${p}" 2>/dev/null || wc -c < "${p}" || echo 0)
+      break
     fi
+  done
+fi
+
+echo "----------------------------------------------------------------------"
+if [[ -n "${LOGO_SRC}" ]]; then
+  echo "[LOGO] Source:       ${LOGO_SRC}"
+  echo "[LOGO] Destination:  ${LOGO_DEST}"
+  echo "[LOGO] Source Size:  ${LOGO_SRC_SIZE} bytes"
+  
+  if [[ "${LOGO_SRC}" != "${LOGO_DEST}" ]]; then
+    echo "[+] Copying authoritative Motion Logo to ${LOGO_DEST}..."
+    cp -f "${LOGO_SRC}" "${LOGO_DEST}"
+  fi
+  
+  chmod 644 "${LOGO_DEST}"
+  chown "${TARGET_USER}:${TARGET_GID}" "${LOGO_DEST}" 2>/dev/null || true
+  
+  if [[ -s "${LOGO_DEST}" ]]; then
+    DEST_SIZE=$(stat -c%s "${LOGO_DEST}" 2>/dev/null || wc -c < "${LOGO_DEST}" || echo 0)
+    echo "[LOGO] Dest Size:    ${DEST_SIZE} bytes"
+    echo "[LOGO] Verification: PASS"
   else
-    rm -f /opt/streampulse/logo/motion-logo.mp4 2>/dev/null
-    echo "  -> Optional Motion Logo MP4 not found on server (Guaranteed HTML5 fallback active)."
+    echo -e "\e[31m[LOGO] Verification: FAIL (Destination file missing or empty after copy)\e[0m" >&2
+    exit 1
+  fi
+else
+  # Check if server optionally provides it as fallback
+  echo "[LOGO] Notice: No local Motion Logo MP4 found in ~/Downloads/ (Checking optional server asset)..."
+  if curl -fsSL --connect-timeout 5 --max-time 15 "${SERVER_URL}/api/rpi-player/motion-logo" -o "${LOGO_DEST}" 2>/dev/null && [[ -s "${LOGO_DEST}" ]]; then
+    chmod 644 "${LOGO_DEST}"
+    chown "${TARGET_USER}:${TARGET_GID}" "${LOGO_DEST}" 2>/dev/null || true
+    DEST_SIZE=$(stat -c%s "${LOGO_DEST}" 2>/dev/null || wc -c < "${LOGO_DEST}" || echo 0)
+    echo "[LOGO] Source:       ${SERVER_URL}/api/rpi-player/motion-logo (Server)"
+    echo "[LOGO] Destination:  ${LOGO_DEST}"
+    echo "[LOGO] Size:         ${DEST_SIZE} bytes"
+    echo "[LOGO] Verification: PASS"
+  else
+    rm -f "${LOGO_DEST}" 2>/dev/null
+    echo "[LOGO] Source:       None (Optional MP4 not provided)"
+    echo "[LOGO] Destination:  ${LOGO_DEST} (Guaranteed HTML5 fallback active)"
+    echo "[LOGO] Fallback:     /opt/streampulse/logo/logo-fallback.html (Verified)"
+    echo "[LOGO] Verification: PASS (Guaranteed HTML5 fallback active)"
   fi
 fi
+echo "----------------------------------------------------------------------"
 
 # Create Self-Contained Standalone Universal Kiosk Player (Single Unified Display Surface)
 cat << 'HTML' > /opt/streampulse/logo/player.html
@@ -551,6 +600,7 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
     #motion-video.hidden {
       opacity: 0;
       pointer-events: none;
+      display: none;
     }
     #html-fallback {
       position: absolute;
@@ -570,6 +620,7 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
     }
     #html-fallback.active {
       display: flex;
+      z-index: 15;
     }
     .pulse-ring {
       width: 150px;
@@ -691,9 +742,8 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
     <video id="live-video" class="kiosk-video" autoplay playsinline muted preload="auto"></video>
 
     <!-- 2. Permanent Offline Motion Logo Video Element -->
-    <video id="motion-video" class="kiosk-video" autoplay loop muted playsinline preload="auto">
+    <video id="motion-video" class="kiosk-video" src="motion-logo.mp4" autoplay loop muted playsinline preload="auto">
       <source src="motion-logo.mp4" type="video/mp4">
-      <source src="/opt/streampulse/logo/motion-logo.mp4" type="video/mp4">
     </video>
 
     <!-- 3. Local HTML Fallback (when MP4 is unplayable) -->
@@ -846,20 +896,26 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       // Safe Video Playback Utilities
       // --------------------------------------------------
       function safePlay(videoEl) {
-        if (!videoEl) return Promise.resolve();
+        if (!videoEl) return Promise.resolve(false);
         videoEl.muted = true;
         videoEl.playsInline = true;
-        const playPromise = videoEl.play();
-        if (playPromise !== undefined) {
-          return playPromise.catch(err => {
-            console.warn('[StreamPulse Player] Play rejected, retrying muted:', err.message);
-            videoEl.muted = true;
-            return videoEl.play().catch(e => {
-              console.warn('[StreamPulse Player] Muted play also failed:', e.message);
+        try {
+          const playPromise = videoEl.play();
+          if (playPromise !== undefined) {
+            return playPromise.then(() => true).catch(err => {
+              console.warn('[StreamPulse Player] Play rejected, retrying muted:', err.message);
+              videoEl.muted = true;
+              return videoEl.play().then(() => true).catch(e => {
+                console.warn('[StreamPulse Player] Muted play also failed:', e.message);
+                return false;
+              });
             });
-          });
+          }
+        } catch (syncErr) {
+          console.warn('[StreamPulse Player] Synchronous play error:', syncErr.message);
+          return Promise.resolve(false);
         }
-        return Promise.resolve();
+        return Promise.resolve(true);
       }
 
       // User interaction listener to allow unmuting audio
@@ -877,16 +933,24 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       // --------------------------------------------------
       function showOfflineVisuals() {
         if (!mp4Failed) {
+          if (motionVideo.error || motionVideo.networkState === 3) {
+            handleMp4Failure();
+            return;
+          }
           console.log('[StreamPulse Player] [LOGO ACTIVATION] Displaying Motion Logo MP4 loop.');
           motionVideo.classList.remove('hidden');
+          motionVideo.style.display = '';
           htmlFallback.classList.remove('active');
-          motionVideo.currentTime = 0;
-          safePlay(motionVideo).catch(() => {
-            handleMp4Failure();
+          try { motionVideo.currentTime = 0; } catch(e) {}
+          safePlay(motionVideo).then(success => {
+            if (!success && currentState === 'STANDBY') {
+              handleMp4Failure();
+            }
           });
         } else {
           console.log('[StreamPulse Player] [LOGO ACTIVATION] Displaying HTML/CSS animated fallback.');
           motionVideo.classList.add('hidden');
+          motionVideo.style.display = 'none';
           htmlFallback.classList.add('active');
         }
       }
@@ -895,16 +959,46 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
         mp4Failed = true;
         console.warn('[StreamPulse Player] Motion Logo MP4 unavailable or unplayable. Activating HTML fallback.');
         motionVideo.classList.add('hidden');
+        motionVideo.style.display = 'none';
+        try { motionVideo.pause(); } catch(e) {}
         htmlFallback.classList.add('active');
         if (fallbackStatus) {
           fallbackStatus.textContent = 'Stream offline • Polling ' + serverUrl + '...';
         }
       }
 
+      // Comprehensive Motion Logo MP4 Lifecycle Handlers (Both <video> and <source>)
+      const motionSource = motionVideo.querySelector('source');
+      if (motionSource) {
+        motionSource.addEventListener('error', handleMp4Failure);
+      }
       motionVideo.addEventListener('error', handleMp4Failure);
+
+      motionVideo.addEventListener('loadedmetadata', () => {
+        if (currentState === 'STANDBY' && !mp4Failed) {
+          console.log('[StreamPulse Player] Motion Logo MP4 metadata loaded (' + motionVideo.videoWidth + 'x' + motionVideo.videoHeight + ').');
+        }
+      });
+      motionVideo.addEventListener('canplay', () => {
+        if (currentState === 'STANDBY' && !mp4Failed && motionVideo.paused) {
+          safePlay(motionVideo);
+        }
+      });
+      motionVideo.addEventListener('playing', () => {
+        if (currentState === 'STANDBY' && !mp4Failed) {
+          motionVideo.classList.remove('hidden');
+          motionVideo.style.display = '';
+          htmlFallback.classList.remove('active');
+        }
+      });
       motionVideo.addEventListener('stalled', () => {
         if (currentState === 'STANDBY' && motionVideo.paused && !mp4Failed) {
           safePlay(motionVideo);
+        }
+      });
+      motionVideo.addEventListener('waiting', () => {
+        if (currentState === 'STANDBY' && !mp4Failed) {
+          console.log('[StreamPulse Player] Motion Logo buffering...');
         }
       });
       motionVideo.addEventListener('ended', () => {
@@ -913,6 +1007,16 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
           safePlay(motionVideo);
         }
       });
+
+      // Standby visual sanity watchdog (Never allow black screen)
+      setTimeout(() => {
+        if (currentState === 'STANDBY' && !mp4Failed) {
+          if (motionVideo.paused || motionVideo.readyState < 2 || motionVideo.videoWidth === 0) {
+            console.warn('[StreamPulse Player] Standby sanity watchdog: Motion video not actively rendering frames. Engaging HTML fallback.');
+            handleMp4Failure();
+          }
+        }
+      }, 1500);
 
       // --------------------------------------------------
       // STATE A & C: Switch to Offline Standby (Logo / Fallback)
@@ -1805,6 +1909,148 @@ echo "  Display:     ${DISPLAY:-:0} | Wayland: ${WAYLAND_DISPLAY:-wayland-0}"
 echo "======================================================================"
 EOF_DIAGNOSE
 
+# --- 10.8 streampulse-update.sh ---
+cat << 'EOF_UPDATE' > /opt/streampulse/bin/streampulse-update.sh
+#!/usr/bin/env bash
+# ==============================================================================
+# StreamPulse Lightweight Auto-Update Engine
+# Runs safely on boot via streampulse-update.service
+# Path: /opt/streampulse/bin/streampulse-update.sh
+# ==============================================================================
+
+set -uo pipefail
+
+PLAYER_CONF="/opt/streampulse/config/player.conf"
+VERSION_FILE="/opt/streampulse/VERSION"
+LOCAL_VERSION="1.0.0"
+
+if [[ -f "${VERSION_FILE}" ]]; then
+  LOCAL_VERSION="$(tr -d ' \r\n' < "${VERSION_FILE}" || echo "1.0.0")"
+fi
+
+if [[ ! -f "${PLAYER_CONF}" ]]; then
+  echo "[StreamPulse Update] Configuration (${PLAYER_CONF}) missing. Skipping update check."
+  exit 0
+fi
+
+SERVER_URL="$(grep '^SERVER_URL=' "${PLAYER_CONF}" 2>/dev/null | cut -d= -f2- | tr -d '"\r\n' || echo '')"
+if [[ -z "${SERVER_URL}" ]]; then
+  echo "[StreamPulse Update] SERVER_URL not defined in player.conf. Skipping update check."
+  exit 0
+fi
+
+# Ensure trailing slash removed
+SERVER_URL="${SERVER_URL%/}"
+
+echo "[StreamPulse Update] Checking for updates (Local Version: ${LOCAL_VERSION}, Server: ${SERVER_URL})..."
+
+# Fetch server version with strict timeout
+REMOTE_VERSION_RESP="$(curl -sSL -m 8 --connect-timeout 5 "${SERVER_URL}/api/rpi-player/version" 2>/dev/null || echo '')"
+
+if [[ -z "${REMOTE_VERSION_RESP}" ]]; then
+  echo "[StreamPulse Update] Server unreachable or network offline. Preserving current version (${LOCAL_VERSION})."
+  exit 0
+fi
+
+# Extract version string (support plain text or JSON { "version": "x.y.z" })
+if echo "${REMOTE_VERSION_RESP}" | grep -q '^{'; then
+  REMOTE_VERSION="$(echo "${REMOTE_VERSION_RESP}" | grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' | cut -d'"' -f4 || echo '')"
+else
+  REMOTE_VERSION="$(echo "${REMOTE_VERSION_RESP}" | tr -d ' \r\n' || echo '')"
+fi
+
+if [[ -z "${REMOTE_VERSION}" ]]; then
+  echo "[StreamPulse Update] Invalid version response from server. Preserving current version (${LOCAL_VERSION})."
+  exit 0
+fi
+
+echo "[StreamPulse Update] Remote version: ${REMOTE_VERSION} | Local version: ${LOCAL_VERSION}"
+
+if [[ "${REMOTE_VERSION}" == "${LOCAL_VERSION}" ]]; then
+  echo "[StreamPulse Update] StreamPulse is up to date (${LOCAL_VERSION}). No action required."
+  exit 0
+fi
+
+echo "[StreamPulse Update] New StreamPulse update detected: ${REMOTE_VERSION} (Current: ${LOCAL_VERSION}). Initiating safe update..."
+
+# Create staging and backup directories
+STAGING_DIR="/tmp/streampulse-update-staging"
+BACKUP_DIR="/opt/streampulse/backups/pre-update-${LOCAL_VERSION}"
+rm -rf "${STAGING_DIR}"
+mkdir -p "${STAGING_DIR}" "${BACKUP_DIR}"
+
+# 1. Download updated installer payload
+UPDATE_SCRIPT="${STAGING_DIR}/full-install.sh"
+if ! curl -fsSL -m 30 --connect-timeout 10 "${SERVER_URL}/api/rpi-player/script/universal-install" -o "${UPDATE_SCRIPT}"; then
+  echo "[StreamPulse Update] [ERROR] Failed to download update payload from server. Aborting update." >&2
+  rm -rf "${STAGING_DIR}"
+  exit 0
+fi
+
+# 2. Syntax integrity check
+if ! bash -n "${UPDATE_SCRIPT}"; then
+  echo "[StreamPulse Update] [ERROR] Downloaded update script failed syntax verification (bash -n). Aborting." >&2
+  rm -rf "${STAGING_DIR}"
+  exit 0
+fi
+
+# 3. Create pre-update backup of current scripts, configs, and assets
+echo "[StreamPulse Update] Backing up current installation to ${BACKUP_DIR}..."
+cp -rp /opt/streampulse/bin "${BACKUP_DIR}/" 2>/dev/null || true
+cp -rp /opt/streampulse/config "${BACKUP_DIR}/" 2>/dev/null || true
+cp -p /opt/streampulse/logo/player.html "${BACKUP_DIR}/" 2>/dev/null || true
+cp -p /opt/streampulse/logo/logo-fallback.html "${BACKUP_DIR}/" 2>/dev/null || true
+cp -p /opt/streampulse/logo/hls.min.js "${BACKUP_DIR}/" 2>/dev/null || true
+[[ -f /opt/streampulse/logo/motion-logo.mp4 ]] && cp -p /opt/streampulse/logo/motion-logo.mp4 "${BACKUP_DIR}/" 2>/dev/null || true
+[[ -f "${VERSION_FILE}" ]] && cp -p "${VERSION_FILE}" "${BACKUP_DIR}/" 2>/dev/null || true
+
+# 4. Execute the update using installer in safe non-destructive update mode
+echo "[StreamPulse Update] Applying StreamPulse update payload (${REMOTE_VERSION})..."
+
+CHANNEL="$(grep '^CHANNEL_NAME=' "${PLAYER_CONF}" 2>/dev/null | cut -d= -f2- | tr -d '"\r\n' || echo 'channel1')"
+STREAM_KEY="$(grep '^STREAM_KEY=' "${PLAYER_CONF}" 2>/dev/null | cut -d= -f2- | tr -d '"\r\n' || echo 'live_stream')"
+
+if bash "${UPDATE_SCRIPT}" --channel "${CHANNEL}" --key "${STREAM_KEY}" --server "${SERVER_URL}" --no-validate; then
+  echo "${REMOTE_VERSION}" > "${VERSION_FILE}"
+  echo "[StreamPulse Update] [SUCCESS] StreamPulse successfully updated to version ${REMOTE_VERSION}!"
+  
+  # Trigger post-update validation if available
+  if [[ -x "/opt/streampulse/bin/validate.sh" ]]; then
+    /opt/streampulse/bin/validate.sh || true
+  fi
+else
+  echo "[StreamPulse Update] [ERROR] Update execution failed. Rolling back previous version..." >&2
+  if [[ -d "${BACKUP_DIR}/bin" ]]; then
+    cp -rp "${BACKUP_DIR}/bin/"* /opt/streampulse/bin/ 2>/dev/null || true
+  fi
+  if [[ -f "${BACKUP_DIR}/player.html" ]]; then
+    cp -p "${BACKUP_DIR}/player.html" /opt/streampulse/logo/ 2>/dev/null || true
+  fi
+  if [[ -f "${BACKUP_DIR}/logo-fallback.html" ]]; then
+    cp -p "${BACKUP_DIR}/logo-fallback.html" /opt/streampulse/logo/ 2>/dev/null || true
+  fi
+  if [[ -f "${BACKUP_DIR}/hls.min.js" ]]; then
+    cp -p "${BACKUP_DIR}/hls.min.js" /opt/streampulse/logo/ 2>/dev/null || true
+  fi
+  if [[ -f "${BACKUP_DIR}/motion-logo.mp4" ]]; then
+    cp -p "${BACKUP_DIR}/motion-logo.mp4" /opt/streampulse/logo/ 2>/dev/null || true
+  fi
+  if [[ -f "${BACKUP_DIR}/VERSION" ]]; then
+    cp -p "${BACKUP_DIR}/VERSION" /opt/streampulse/ 2>/dev/null || true
+  fi
+  systemctl restart streampulse-player.service 2>/dev/null || true
+  echo "[StreamPulse Update] Rollback complete. Preserved working version ${LOCAL_VERSION}."
+fi
+
+# Clean temporary staging
+rm -rf "${STAGING_DIR}"
+exit 0
+EOF_UPDATE
+
+# Write authoritative VERSION file
+echo "2.4.0" > /opt/streampulse/VERSION
+chmod 644 /opt/streampulse/VERSION
+
 # --- 10.7 validate.sh ---
 cat << 'EOF_VALIDATE' > /opt/streampulse/bin/validate.sh
 #!/usr/bin/env bash
@@ -1816,7 +2062,7 @@ cat << 'EOF_VALIDATE' > /opt/streampulse/bin/validate.sh
 
 set -uo pipefail
 
-TOTAL_CHECKS=20
+TOTAL_CHECKS=24
 PASSED_CHECKS=0
 FAILED_CHECKS=0
 WARNINGS=0
@@ -1833,7 +2079,6 @@ print_warn() {
   local detail="${2:-}"
   echo -e "\e[33m[WARN]\e[0m ${title} \e[33m(${detail})\e[0m"
   (( WARNINGS++ ))
-  (( PASSED_CHECKS++ ))
 }
 
 print_fail() {
@@ -2020,30 +2265,72 @@ else
   print_fail "Duplicate Lock" "flock locking missing in launcher"
 fi
 
-# 18. Common Logo Assets & Player Display Verification
+# 18. Local Source & Installed Motion Logo Asset Check
 LOGO_DIR="/opt/streampulse/logo"
-if [[ -s "${LOGO_DIR}/player.html" ]] && [[ -s "${LOGO_DIR}/logo-fallback.html" ]] && [[ -s "${LOGO_DIR}/hls.min.js" ]]; then
-  if [[ -s "${LOGO_DIR}/motion-logo.mp4" ]]; then
-    print_pass "Offline Visuals" "player.html + logo-fallback.html + hls.min.js + motion-logo.mp4 (All Ready)"
+USER_DL_1="${USER_HOME}/Downloads/Motion Logo.mp4"
+USER_DL_2="${USER_HOME}/Downloads/motion_logo.mp4"
+
+# Check Source in Downloads
+if [[ -f "${USER_DL_1}" ]] && [[ -s "${USER_DL_1}" ]]; then
+  SRC_SIZE=$(stat -c%s "${USER_DL_1}" 2>/dev/null || wc -c < "${USER_DL_1}" || echo 0)
+  print_pass "Motion Logo Source" "${USER_DL_1} (size=${SRC_SIZE} bytes)"
+elif [[ -f "${USER_DL_2}" ]] && [[ -s "${USER_DL_2}" ]]; then
+  SRC_SIZE=$(stat -c%s "${USER_DL_2}" 2>/dev/null || wc -c < "${USER_DL_2}" || echo 0)
+  print_pass "Motion Logo Source" "${USER_DL_2} (size=${SRC_SIZE} bytes)"
+else
+  print_warn "Motion Logo Source" "No local Motion Logo found in ~/Downloads/ (will check installed/fallback)"
+fi
+
+# Check Installed /opt/streampulse/logo/motion-logo.mp4
+if [[ -f "${LOGO_DIR}/motion-logo.mp4" ]] && [[ -s "${LOGO_DIR}/motion-logo.mp4" ]]; then
+  INSTALLED_SIZE=$(stat -c%s "${LOGO_DIR}/motion-logo.mp4" 2>/dev/null || wc -c < "${LOGO_DIR}/motion-logo.mp4" || echo 0)
+  if [[ -r "${LOGO_DIR}/motion-logo.mp4" ]]; then
+    print_pass "Installed Motion Logo" "${LOGO_DIR}/motion-logo.mp4 (size=${INSTALLED_SIZE} bytes, readable by ${TARGET_USER})"
   else
-    print_pass "Offline Visuals" "player.html + logo-fallback.html + hls.min.js (Guaranteed HTML5 fallback active, MP4 optional)"
+    print_fail "Installed Motion Logo" "${LOGO_DIR}/motion-logo.mp4 exists but not readable by ${TARGET_USER}"
   fi
+else
+  if [[ -s "${LOGO_DIR}/logo-fallback.html" ]]; then
+    print_pass "Installed Motion Logo" "Guaranteed HTML5 fallback active (${LOGO_DIR}/logo-fallback.html, MP4 optional)"
+  else
+    print_fail "Installed Motion Logo" "Neither motion-logo.mp4 nor logo-fallback.html found in ${LOGO_DIR}"
+  fi
+fi
+
+# 19. Player HTML & Local Engine Verification
+if [[ -s "${LOGO_DIR}/player.html" ]] && grep -q "motion-logo.mp4" "${LOGO_DIR}/player.html" && [[ -s "${LOGO_DIR}/hls.min.js" ]]; then
+  print_pass "Player Display Core" "player.html (with motion-logo.mp4 + hls.min.js verified)"
 else
   MISSING_ASSETS=""
   [[ ! -s "${LOGO_DIR}/player.html" ]] && MISSING_ASSETS="${MISSING_ASSETS} player.html"
-  [[ ! -s "${LOGO_DIR}/logo-fallback.html" ]] && MISSING_ASSETS="${MISSING_ASSETS} logo-fallback.html"
+  ! grep -q "motion-logo.mp4" "${LOGO_DIR}/player.html" 2>/dev/null && MISSING_ASSETS="${MISSING_ASSETS} (motion-logo.mp4 reference in player.html)"
   [[ ! -s "${LOGO_DIR}/hls.min.js" ]] && MISSING_ASSETS="${MISSING_ASSETS} hls.min.js"
-  print_fail "Offline Visuals" "Missing mandatory assets in ${LOGO_DIR}:${MISSING_ASSETS}"
+  print_fail "Player Display Core" "Asset check failed: ${MISSING_ASSETS}"
 fi
 
-# 19. Reboot Persistence & Service Auto-Start Check
+# 20. Version & Auto-Update Service Check
+VERSION_FILE="/opt/streampulse/VERSION"
+if [[ -f "${VERSION_FILE}" ]]; then
+  CURR_VER="$(tr -d ' \r\n' < "${VERSION_FILE}" || echo 'unknown')"
+  print_pass "StreamPulse Version" "Version ${CURR_VER} registered (${VERSION_FILE})"
+else
+  print_warn "StreamPulse Version" "${VERSION_FILE} missing"
+fi
+
+if systemctl is-enabled streampulse-update.service >/dev/null 2>&1; then
+  print_pass "Auto-Update Engine" "streampulse-update.service ENABLED on boot"
+else
+  print_warn "Auto-Update Engine" "streampulse-update.service not enabled"
+fi
+
+# 21. Reboot Persistence & Service Auto-Start Check
 if systemctl is-enabled streampulse-player.service >/dev/null 2>&1; then
   print_pass "Reboot Persistence" "streampulse-player.service ENABLED on boot"
 else
   print_warn "Reboot Persistence" "streampulse-player.service not enabled"
 fi
 
-# 20. Authoritative Service Active Status Check
+# 22. Authoritative Service Active Status Check
 if systemctl is-active --quiet streampulse-player.service 2>/dev/null; then
   print_pass "Playback Service" "streampulse-player.service ACTIVE (Running)"
 elif systemctl is-enabled --quiet streampulse-player.service 2>/dev/null; then
@@ -2083,10 +2370,34 @@ if [[ -f "${LABWC_AUTOSTART}" ]]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 12. Authoritative Systemd Service (ONE Single Fullscreen Service)
+# 12. Authoritative Systemd Services (Player & Auto-Update)
 # ------------------------------------------------------------------------------
-echo "[+] Provisioning Single Authoritative systemd service unit..."
+echo "[+] Provisioning Authoritative systemd service units..."
 
+# 1. Update service unit
+cat << 'UPDATE_UNIT' > /etc/systemd/system/streampulse-update.service
+[Unit]
+Description=StreamPulse Lightweight Auto-Update Check on Boot
+Documentation=https://streampulse.io
+After=network-online.target
+Wants=network-online.target
+Before=streampulse-player.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/streampulse/bin/streampulse-update.sh
+TimeoutSec=45
+StandardOutput=journal
+StandardError=journal
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target graphical.target
+UPDATE_UNIT
+
+chmod 644 /etc/systemd/system/streampulse-update.service
+
+# 2. Player service unit
 # Ensure any legacy / duplicate dashboard service or alias symlinks are removed
 if systemctl is-active --quiet streampulse-dashboard.service 2>/dev/null; then
   systemctl stop streampulse-dashboard.service 2>/dev/null || true
@@ -2131,6 +2442,7 @@ UNIT
 
 chmod 644 /etc/systemd/system/streampulse-player.service
 systemctl daemon-reload
+systemctl enable streampulse-update.service 2>/dev/null || true
 systemctl enable streampulse-player.service
 
 # ------------------------------------------------------------------------------

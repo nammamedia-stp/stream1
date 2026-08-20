@@ -63,6 +63,7 @@
     #motion-video.hidden {
       opacity: 0;
       pointer-events: none;
+      display: none;
     }
     #html-fallback {
       position: absolute;
@@ -82,6 +83,7 @@
     }
     #html-fallback.active {
       display: flex;
+      z-index: 15;
     }
     .pulse-ring {
       width: 150px;
@@ -203,9 +205,8 @@
     <video id="live-video" class="kiosk-video" autoplay playsinline muted preload="auto"></video>
 
     <!-- 2. Permanent Offline Motion Logo Video Element -->
-    <video id="motion-video" class="kiosk-video" autoplay loop muted playsinline preload="auto">
+    <video id="motion-video" class="kiosk-video" src="motion-logo.mp4" autoplay loop muted playsinline preload="auto">
       <source src="motion-logo.mp4" type="video/mp4">
-      <source src="/opt/streampulse/logo/motion-logo.mp4" type="video/mp4">
     </video>
 
     <!-- 3. Local HTML Fallback (when MP4 is unplayable) -->
@@ -358,20 +359,26 @@
       // Safe Video Playback Utilities
       // --------------------------------------------------
       function safePlay(videoEl) {
-        if (!videoEl) return Promise.resolve();
+        if (!videoEl) return Promise.resolve(false);
         videoEl.muted = true;
         videoEl.playsInline = true;
-        const playPromise = videoEl.play();
-        if (playPromise !== undefined) {
-          return playPromise.catch(err => {
-            console.warn('[StreamPulse Player] Play rejected, retrying muted:', err.message);
-            videoEl.muted = true;
-            return videoEl.play().catch(e => {
-              console.warn('[StreamPulse Player] Muted play also failed:', e.message);
+        try {
+          const playPromise = videoEl.play();
+          if (playPromise !== undefined) {
+            return playPromise.then(() => true).catch(err => {
+              console.warn('[StreamPulse Player] Play rejected, retrying muted:', err.message);
+              videoEl.muted = true;
+              return videoEl.play().then(() => true).catch(e => {
+                console.warn('[StreamPulse Player] Muted play also failed:', e.message);
+                return false;
+              });
             });
-          });
+          }
+        } catch (syncErr) {
+          console.warn('[StreamPulse Player] Synchronous play error:', syncErr.message);
+          return Promise.resolve(false);
         }
-        return Promise.resolve();
+        return Promise.resolve(true);
       }
 
       // User interaction listener to allow unmuting audio
@@ -389,16 +396,24 @@
       // --------------------------------------------------
       function showOfflineVisuals() {
         if (!mp4Failed) {
+          if (motionVideo.error || motionVideo.networkState === 3) {
+            handleMp4Failure();
+            return;
+          }
           console.log('[StreamPulse Player] [LOGO ACTIVATION] Displaying Motion Logo MP4 loop.');
           motionVideo.classList.remove('hidden');
+          motionVideo.style.display = '';
           htmlFallback.classList.remove('active');
-          motionVideo.currentTime = 0;
-          safePlay(motionVideo).catch(() => {
-            handleMp4Failure();
+          try { motionVideo.currentTime = 0; } catch(e) {}
+          safePlay(motionVideo).then(success => {
+            if (!success && currentState === 'STANDBY') {
+              handleMp4Failure();
+            }
           });
         } else {
           console.log('[StreamPulse Player] [LOGO ACTIVATION] Displaying HTML/CSS animated fallback.');
           motionVideo.classList.add('hidden');
+          motionVideo.style.display = 'none';
           htmlFallback.classList.add('active');
         }
       }
@@ -407,16 +422,46 @@
         mp4Failed = true;
         console.warn('[StreamPulse Player] Motion Logo MP4 unavailable or unplayable. Activating HTML fallback.');
         motionVideo.classList.add('hidden');
+        motionVideo.style.display = 'none';
+        try { motionVideo.pause(); } catch(e) {}
         htmlFallback.classList.add('active');
         if (fallbackStatus) {
           fallbackStatus.textContent = 'Stream offline • Polling ' + serverUrl + '...';
         }
       }
 
+      // Comprehensive Motion Logo MP4 Lifecycle Handlers (Both <video> and <source>)
+      const motionSource = motionVideo.querySelector('source');
+      if (motionSource) {
+        motionSource.addEventListener('error', handleMp4Failure);
+      }
       motionVideo.addEventListener('error', handleMp4Failure);
+
+      motionVideo.addEventListener('loadedmetadata', () => {
+        if (currentState === 'STANDBY' && !mp4Failed) {
+          console.log('[StreamPulse Player] Motion Logo MP4 metadata loaded (' + motionVideo.videoWidth + 'x' + motionVideo.videoHeight + ').');
+        }
+      });
+      motionVideo.addEventListener('canplay', () => {
+        if (currentState === 'STANDBY' && !mp4Failed && motionVideo.paused) {
+          safePlay(motionVideo);
+        }
+      });
+      motionVideo.addEventListener('playing', () => {
+        if (currentState === 'STANDBY' && !mp4Failed) {
+          motionVideo.classList.remove('hidden');
+          motionVideo.style.display = '';
+          htmlFallback.classList.remove('active');
+        }
+      });
       motionVideo.addEventListener('stalled', () => {
         if (currentState === 'STANDBY' && motionVideo.paused && !mp4Failed) {
           safePlay(motionVideo);
+        }
+      });
+      motionVideo.addEventListener('waiting', () => {
+        if (currentState === 'STANDBY' && !mp4Failed) {
+          console.log('[StreamPulse Player] Motion Logo buffering...');
         }
       });
       motionVideo.addEventListener('ended', () => {
@@ -425,6 +470,16 @@
           safePlay(motionVideo);
         }
       });
+
+      // Standby visual sanity watchdog (Never allow black screen)
+      setTimeout(() => {
+        if (currentState === 'STANDBY' && !mp4Failed) {
+          if (motionVideo.paused || motionVideo.readyState < 2 || motionVideo.videoWidth === 0) {
+            console.warn('[StreamPulse Player] Standby sanity watchdog: Motion video not actively rendering frames. Engaging HTML fallback.');
+            handleMp4Failure();
+          }
+        }
+      }, 1500);
 
       // --------------------------------------------------
       // STATE A & C: Switch to Offline Standby (Logo / Fallback)

@@ -1127,10 +1127,13 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
         startHlsPolling();
       }
 
-      function switchToLiveHls() {
-        if (currentState === 'LIVE') return;
+        let activeLiveUrl = HLS_URL;
+
+        function switchToLiveHls(customUrl) {
+        if (currentState === 'LIVE' && (!customUrl || activeLiveUrl === customUrl)) return;
         currentState = 'LIVE';
-        console.log('[StreamPulse Player] Entering LIVE state.');
+        if (customUrl) activeLiveUrl = customUrl;
+        console.log('[StreamPulse Player] Entering LIVE state with URL:', activeLiveUrl);
 
         stopHlsPolling();
 
@@ -1139,7 +1142,7 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
           hlsInstance = null;
         }
 
-        const cacheBustUrl = HLS_URL + (HLS_URL.includes('?') ? '&' : '?') + '_t=' + Date.now();
+        const cacheBustUrl = activeLiveUrl + (activeLiveUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
 
         if (window.Hls && Hls.isSupported()) {
           hlsInstance = new Hls({
@@ -1212,18 +1215,36 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
         stopHlsPolling();
         pollTimer = setInterval(async () => {
           if (currentState === 'LIVE') return;
+          const candidateUrls = [HLS_URL];
           try {
-            const checkUrl = HLS_URL + (HLS_URL.includes('?') ? '&' : '?') + '_t=' + Date.now();
-            const res = await fetch(checkUrl, { method: 'GET', cache: 'no-store' });
-            if (res.ok && res.status === 200) {
-              const text = await res.text();
-              if (text && text.includes('#EXTM3U')) {
-                console.log('[StreamPulse Player] Valid HLS playlist detected! Switching to live stream.');
-                switchToLiveHls();
+            const discUrl = '${proto}://${cleanHost}/api/stream/active?channel=' + encodeURIComponent(STREAM_KEY) + '&key=' + encodeURIComponent(STREAM_KEY) + '&_t=' + Date.now();
+            const discRes = await fetch(discUrl, { headers: { 'Accept': 'application/json' } });
+            if (discRes.ok) {
+              const data = await discRes.json();
+              if (data.hlsMasterUrl && !candidateUrls.includes(data.hlsMasterUrl)) candidateUrls.unshift(data.hlsMasterUrl);
+              if (data.candidateUrls) {
+                for (const u of data.candidateUrls) {
+                  if (u && !candidateUrls.includes(u)) candidateUrls.push(u);
+                }
               }
             }
-          } catch(e) {
-            // Stream offline
+          } catch(e) {}
+
+          for (const testUrl of candidateUrls) {
+            try {
+              const checkUrl = testUrl + (testUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
+              const res = await fetch(checkUrl, { method: 'GET', cache: 'no-store' });
+              if (res.ok && res.status === 200) {
+                const text = await res.text();
+                if (text && text.includes('#EXTM3U')) {
+                  console.log('[StreamPulse Player] Valid HLS playlist detected at:', testUrl);
+                  switchToLiveHls(testUrl);
+                  return;
+                }
+              }
+            } catch(e) {
+              // Stream offline
+            }
           }
         }, 2000);
       }

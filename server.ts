@@ -3654,12 +3654,188 @@ async function startServer() {
   });
 
   // ----------------------------------------------------
+  // AUTHORITATIVE STREAM DISCOVERY & RESOLUTION ENDPOINT
+  // ----------------------------------------------------
+  app.get([
+    '/api/stream/active',
+    '/api/stream/discovery',
+    '/api/stream/active-stream',
+    '/api/rpi-player/stream-info',
+    '/api/rpi-player/active-stream'
+  ], async (req: any, res: any) => {
+    try {
+      const host = (req.headers['x-forwarded-host'] || req.headers.host || '187.127.210.81').toString();
+      const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.protocol === 'https' || req.secure;
+      const protoHost = `${isHttps ? 'https' : 'http'}://${host}`;
+
+      const requestedKey = (req.query.streamKey || req.query.key || '').toString().trim();
+      const requestedChannel = (req.query.channel || req.query.channelName || '').toString().trim();
+
+      const allStreams = await db.getStreams();
+      const activeKeys = Array.from(activeStreamClients.keys());
+
+      // Helper to check if HLS files exist, are actively advancing, and have valid M3U8 content on disk
+      const checkHlsOnDisk = (key: string): boolean => {
+        if (!key) return false;
+        const candidates = [
+          `/var/www/hls/${key}/master.m3u8`,
+          path.resolve(`./data/hls/${key}/master.m3u8`),
+          `/var/www/hls/${key}/Original/index.m3u8`,
+          path.resolve(`./data/hls/${key}/Original/index.m3u8`),
+          `/var/www/hls/${key}/index.m3u8`,
+          path.resolve(`./data/hls/${key}/index.m3u8`)
+        ];
+        for (const p of candidates) {
+          try {
+            if (fs.existsSync(p)) {
+              const stat = fs.statSync(p);
+              if (stat.size > 0) {
+                // Must be actively streaming on RTMP or updated within the last 20 seconds
+                const isActivelyAdvancing = activeStreamClients.has(key) || (Date.now() - stat.mtimeMs < 20000);
+                if (isActivelyAdvancing) {
+                  const content = fs.readFileSync(p, 'utf-8');
+                  if (content.includes('#EXTM3U')) return true;
+                }
+              }
+            }
+          } catch (_) {}
+        }
+        return false;
+      };
+
+      let resolvedStream: any = null;
+      let isLive = false;
+
+      // 1. Direct match by stream key if provided
+      if (requestedKey) {
+        resolvedStream = allStreams.find(s => (s.streamKey === requestedKey || (s as any).stream_key === requestedKey || s.id === requestedKey));
+      }
+
+      // 2. Match by channel if key wasn't specified or didn't match
+      if (!resolvedStream && requestedChannel) {
+        resolvedStream = allStreams.find(s => 
+          s.id === requestedChannel ||
+          s.streamKey === requestedChannel ||
+          (s as any).stream_key === requestedChannel ||
+          (s.title && s.title.toLowerCase() === requestedChannel.toLowerCase()) ||
+          (requestedChannel === 'channel1' && ((s as any).is_primary || s.id === '1'))
+        );
+        if (!resolvedStream && requestedChannel.toLowerCase().includes('channel')) {
+          resolvedStream = allStreams[0] || null;
+        }
+      }
+
+      // 3. Determine if the resolved stream is currently live
+      if (resolvedStream) {
+        const streamKey = resolvedStream.streamKey || resolvedStream.stream_key || 'live_stream';
+        const hasRtmp = activeStreamClients.has(streamKey);
+        const hasDbLive = resolvedStream.status === 'live';
+        const hasHls = checkHlsOnDisk(streamKey);
+        isLive = hasRtmp || hasDbLive || hasHls;
+      }
+
+      // 4. If resolved stream is not live (or no stream resolved), search for any actively broadcasting stream
+      if (!isLive) {
+        // Check active RTMP sessions first
+        for (const activeKey of activeKeys) {
+          const matchingDb = allStreams.find(s => (s.streamKey === activeKey || (s as any).stream_key === activeKey));
+          if (matchingDb) {
+            resolvedStream = matchingDb;
+            isLive = true;
+            break;
+          } else if (checkHlsOnDisk(activeKey)) {
+            resolvedStream = {
+              id: activeKey,
+              title: 'Active Live Stream',
+              streamKey: activeKey,
+              status: 'live'
+            };
+            isLive = true;
+            break;
+          }
+        }
+
+        // Check DB live status
+        if (!isLive) {
+          const liveDbStream = allStreams.find(s => s.status === 'live');
+          if (liveDbStream) {
+            resolvedStream = liveDbStream;
+            isLive = true;
+          }
+        }
+
+        // Check disk HLS files for all streams
+        if (!isLive) {
+          for (const s of allStreams) {
+            const candidateK = s.streamKey || (s as any).stream_key;
+            if (candidateK && checkHlsOnDisk(candidateK)) {
+              resolvedStream = s;
+              isLive = true;
+              break;
+            }
+          }
+        }
+      }
+
+      // 5. Fallback if no streams exist or server is completely idle
+      if (!resolvedStream) {
+        resolvedStream = allStreams[0] || {
+          id: '1',
+          title: requestedChannel || 'Default Channel',
+          streamKey: requestedKey || 'live_stream',
+          status: 'offline'
+        };
+      }
+
+      const streamKey = resolvedStream.streamKey || (resolvedStream as any).stream_key || 'live_stream';
+      const channelName = requestedChannel || resolvedStream.title || 'channel1';
+
+      const candidateUrls = [
+        `${protoHost}/hls/${streamKey}/master.m3u8`,
+        `${protoHost}/hls/${streamKey}/Original/index.m3u8`,
+        `${protoHost}/hls/${streamKey}/index.m3u8`,
+        `${protoHost}/hls/${channelName}/master.m3u8`,
+        `${protoHost}/hls/${channelName}/Original/index.m3u8`,
+        `${protoHost}/hls/${channelName}/index.m3u8`
+      ].filter((u, i, arr) => arr.indexOf(u) === i);
+
+      return res.json({
+        success: true,
+        status: isLive ? 'live' : 'offline',
+        isLive,
+        channel: channelName,
+        channelId: resolvedStream.id,
+        streamKey,
+        title: resolvedStream.title || 'StreamPulse Channel',
+        hlsMasterUrl: `${protoHost}/hls/${streamKey}/master.m3u8`,
+        hlsVariantUrl: `${protoHost}/hls/${streamKey}/Original/index.m3u8`,
+        candidateUrls,
+        rtmpActive: activeStreamClients.has(streamKey),
+        activeStreamsCount: activeKeys.length,
+        serverTime: new Date().toISOString()
+      });
+    } catch (err: any) {
+      console.error('[Stream Discovery API] Error resolving stream:', err);
+      return res.status(500).json({ error: 'Stream discovery failed: ' + err.message });
+    }
+  });
+
+  // ----------------------------------------------------
   // LIGHTWEIGHT STREAM PIPELINE DIAGNOSTICS ENDPOINT
   // ----------------------------------------------------
   app.get(['/api/stream/health', '/api/stream/health/:streamKey', '/api/stream/status', '/api/stream/status/:streamKey'], async (req: any, res: any) => {
-    const streamKey = req.params.streamKey || req.query.streamKey || req.query.key;
-    if (!streamKey || typeof streamKey !== 'string') {
-      return res.status(400).json({ error: 'streamKey parameter is required' });
+    let streamKey = req.params.streamKey || req.query.streamKey || req.query.key;
+    
+    // Auto-resolve streamKey if not provided or set to 'active' or 'channel1'
+    if (!streamKey || streamKey === 'active' || streamKey === 'default') {
+      const activeKeys = Array.from(activeStreamClients.keys());
+      if (activeKeys.length > 0) {
+        streamKey = activeKeys[0];
+      } else {
+        const streams = await db.getStreams();
+        const liveStream = streams.find(s => s.status === 'live') || streams[0];
+        streamKey = liveStream?.streamKey || (liveStream as any)?.stream_key || 'live_stream';
+      }
     }
 
     try {

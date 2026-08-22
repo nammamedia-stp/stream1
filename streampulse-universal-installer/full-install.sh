@@ -833,13 +833,15 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
 
       // Candidate HLS URLs in priority order
       const candidateHlsUrls = directHlsUrl ? [directHlsUrl] : [
-        serverUrl + '/hls/' + streamKey + '/master.m3u8',
-        serverUrl + '/hls/' + streamKey + '/Original/index.m3u8',
-        serverUrl + '/hls/' + streamKey + '/index.m3u8',
         serverUrl + '/hls/' + channelName + '/master.m3u8',
         serverUrl + '/hls/' + channelName + '/Original/index.m3u8',
         serverUrl + '/hls/' + channelName + '/index.m3u8',
-        serverUrl + '/hls/' + channelName + '.m3u8'
+        serverUrl + '/hls/' + channelName + '.m3u8',
+        ...(streamKey && streamKey !== 'live_stream' ? [
+          serverUrl + '/hls/' + streamKey + '/master.m3u8',
+          serverUrl + '/hls/' + streamKey + '/Original/index.m3u8',
+          serverUrl + '/hls/' + streamKey + '/index.m3u8'
+        ] : [])
       ].filter((url, idx, arr) => url && arr.indexOf(url) === idx);
 
       // State Machine Variables
@@ -862,9 +864,13 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       // --------------------------------------------------
       function resetCursor() {
         document.body.classList.remove('cursor-hidden');
-        if (mouseTimer) clearTimeout(mouseTimer);
+        if (mouseTimer) {
+          clearTimeout(mouseTimer);
+          mouseTimer = null;
+        }
         mouseTimer = setTimeout(() => {
           document.body.classList.add('cursor-hidden');
+          mouseTimer = null;
         }, 2500);
       }
       window.addEventListener('mousemove', resetCursor, { passive: true });
@@ -878,36 +884,52 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
         statusMetrics.textContent = detail || '';
         statusOverlay.style.opacity = '1';
 
-        if (overlayFadeTimer) clearTimeout(overlayFadeTimer);
+        if (overlayFadeTimer) {
+          clearTimeout(overlayFadeTimer);
+          overlayFadeTimer = null;
+        }
         if (autoHideMs && autoHideMs > 0) {
           overlayFadeTimer = setTimeout(() => {
             statusOverlay.style.opacity = '0';
+            overlayFadeTimer = null;
           }, autoHideMs);
         }
       }
 
       // --------------------------------------------------
-      // Network AbortController Fetch Wrapper (Prevents Stalled Fetch Memory Leaks)
+      // Safe, Leak-Free Fetch with Native Timeout & Signal Cleanup
       // --------------------------------------------------
-      async function safeFetch(url, options = {}, timeoutMs = 2500) {
+      async function safeFetch(url, options = {}, timeoutMs = 3000) {
         let controller = null;
         let timer = null;
         try {
-          controller = new AbortController();
-          timer = setTimeout(() => {
-            try { if (controller) controller.abort(); } catch(e) {}
-          }, timeoutMs);
+          if (typeof AbortController !== 'undefined') {
+            controller = new AbortController();
+            timer = setTimeout(() => {
+              try { if (controller) controller.abort(); } catch(e) {}
+            }, timeoutMs);
+          }
 
-          const res = await fetch(url, {
+          const fetchOpts = {
             ...options,
-            signal: controller.signal,
             cache: 'no-store'
-          });
-          clearTimeout(timer);
+          };
+          if (controller) {
+            fetchOpts.signal = controller.signal;
+          }
+
+          const res = await fetch(url, fetchOpts);
+          if (timer) {
+            clearTimeout(timer);
+            timer = null;
+          }
           controller = null;
           return res;
         } catch (err) {
-          if (timer) clearTimeout(timer);
+          if (timer) {
+            clearTimeout(timer);
+            timer = null;
+          }
           controller = null;
           return null;
         }
@@ -944,7 +966,7 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       window.addEventListener('keydown', tryUnmute, { passive: true });
 
       // --------------------------------------------------
-      // Motion Logo & Fallback HTML Handling (Rock-Solid Loop)
+      // Motion Logo & Fallback HTML Handling (Zero Memory Leak)
       // --------------------------------------------------
       function showOfflineVisuals() {
         if (!mp4Failed) {
@@ -970,14 +992,20 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       }
 
       function handleMp4Failure() {
+        if (mp4Failed) return;
         mp4Failed = true;
-        console.warn('[StreamPulse Player] Motion Logo MP4 unavailable. Engaging HTML canvas fallback.');
+        console.warn('[StreamPulse Player] Motion Logo MP4 unavailable. Engaging CSS/SVG animated canvas fallback.');
+        try {
+          motionVideo.pause();
+          motionVideo.removeAttribute('src');
+          if (motionVideo.srcObject) motionVideo.srcObject = null;
+          motionVideo.load();
+        } catch(e) {}
         motionVideo.classList.add('hidden');
         motionVideo.style.display = 'none';
-        try { motionVideo.pause(); } catch(e) {}
         htmlFallback.classList.add('active');
         if (fallbackStatus) {
-          fallbackStatus.textContent = 'Stream offline • Polling ' + serverUrl + '...';
+          fallbackStatus.textContent = 'Stream offline • Polling channel ' + channelName + '...';
         }
       }
 
@@ -1008,18 +1036,14 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       });
 
       // --------------------------------------------------
-      // STATE TRANSITION: Switch to Offline Standby (Zero Reload)
+      // Complete & Leak-Free Player Destruction
       // --------------------------------------------------
-      function switchToOfflineStandby(reason) {
-        if (currentState === 'STANDBY') return;
-        currentState = 'STANDBY';
-        console.log('[StreamPulse Player] [STANDBY] Entering STANDBY state. Reason:', reason || 'Stream Offline');
-
+      function destroyLivePlayer() {
         stopStallWatchdog();
         stallCount = 0;
         activeHlsUrl = '';
 
-        // 1. Destroy HLS engine and clean up media buffers
+        // 1. Destroy HLS engine and clean up all media buffers
         if (hlsInstance) {
           try {
             hlsInstance.stopLoad();
@@ -1029,21 +1053,39 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
           hlsInstance = null;
         }
 
-        // 2. Hide, pause, and detach live video element to free GPU/V4L2 buffers
-        liveVideo.classList.remove('active');
-        try {
-          liveVideo.pause();
-          liveVideo.removeAttribute('src');
-          liveVideo.load();
-        } catch (e) {}
+        // 2. Hide, pause, and detach live video element to free GPU & memory
+        if (liveVideo) {
+          liveVideo.classList.remove('active');
+          try {
+            liveVideo.onplaying = null;
+            liveVideo.pause();
+            liveVideo.removeAttribute('src');
+            if (liveVideo.srcObject) {
+              liveVideo.srcObject = null;
+            }
+            liveVideo.load();
+          } catch (e) {}
+        }
+      }
 
-        // 3. Show & play offline logo visuals
+      // --------------------------------------------------
+      // STATE TRANSITION: Switch to Offline Standby (Zero Reload)
+      // --------------------------------------------------
+      function switchToOfflineStandby(reason) {
+        if (currentState === 'STANDBY') return;
+        currentState = 'STANDBY';
+        console.log('[StreamPulse Player] [STANDBY] Entering STANDBY state. Reason:', reason || 'Stream Offline');
+
+        // 1. Fully destroy live player instance
+        destroyLivePlayer();
+
+        // 2. Show & play offline logo visuals
         showOfflineVisuals();
 
-        // 4. Update status overlay
-        updateStatus('offline', 'Stream Offline • Logo Active', 'Channel: ' + channelName, 0);
+        // 3. Update status overlay
+        updateStatus('offline', 'Stream Offline • Standby Active', 'Channel: ' + channelName, 0);
 
-        // 5. Resume authoritative single polling loop
+        // 4. Resume authoritative single polling loop with clean immediate check
         consecutiveOfflineCycles = 0;
         scheduleNextPoll(1000);
       }
@@ -1105,6 +1147,7 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
         // Stop polling immediately while in LIVE state
         stopStreamPolling();
 
+        // Destroy any prior HLS instance cleanly before creating a new one
         if (hlsInstance) {
           try {
             hlsInstance.stopLoad();
@@ -1195,70 +1238,88 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       });
 
       // --------------------------------------------------
-      // Authoritative Single Polling Cycle (No Overlapping Calls, Controlled Backoff)
+      // Authoritative Single Polling Cycle (Bounded, Non-Leaking, Smart Discovery)
       // --------------------------------------------------
       async function runPollCycle() {
         if (currentState === 'LIVE' || isPollCycleRunning) return;
         isPollCycleRunning = true;
 
-        const urlsToTest = [...candidateHlsUrls];
+        let foundLiveStream = false;
 
-        // 1. Check Stream Discovery API with strict timeout
         try {
-          const discoveryUrl = serverUrl + '/api/stream/active?channel=' + encodeURIComponent(channelName) + '&key=' + encodeURIComponent(streamKey) + '&_t=' + Date.now();
+          // 1. Authoritative check via Discovery API
+          const discoveryUrl = serverUrl + '/api/stream/active?channel=' + encodeURIComponent(channelName) + (streamKey && streamKey !== 'live_stream' ? '&key=' + encodeURIComponent(streamKey) : '') + '&_t=' + Date.now();
           const discRes = await safeFetch(discoveryUrl, { headers: { 'Accept': 'application/json' } }, 2500);
 
           if (discRes && discRes.ok && discRes.status === 200) {
             const discData = await discRes.json();
             if (discData) {
-              if (discData.hlsMasterUrl && !urlsToTest.includes(discData.hlsMasterUrl)) {
-                urlsToTest.unshift(discData.hlsMasterUrl);
+              if (discData.isLive === true && discData.status === 'live') {
+                // Channel is LIVE on server — probe the authoritative URL
+                const targetUrl = discData.hlsMasterUrl || (discData.candidateUrls && discData.candidateUrls[0]) || '';
+                if (targetUrl) {
+                  const probeUrl = targetUrl + (targetUrl.includes('?') ? '&' : '?') + '_probe=' + Date.now();
+                  const probeRes = await safeFetch(probeUrl, {
+                    headers: { 'Accept': 'application/x-mpegURL, application/vnd.apple.mpegurl, */*' }
+                  }, 2500);
+
+                  if (probeRes && probeRes.ok && probeRes.status === 200) {
+                    const text = await probeRes.text();
+                    const trimmed = text ? text.trim() : '';
+                    if (trimmed.startsWith('#EXTM3U') && !trimmed.includes('<html') && !trimmed.includes('<!DOCTYPE')) {
+                      console.log('[StreamPulse Player] Valid live stream confirmed at:', targetUrl);
+                      foundLiveStream = true;
+                      isPollCycleRunning = false;
+                      switchToLiveHls(targetUrl);
+                      return;
+                    }
+                  }
+                }
+              } else {
+                // Server confirmed channel is OFFLINE: Do NOT probe candidate URLs (avoids 404 flood)
+                consecutiveOfflineCycles++;
               }
-              if (discData.candidateUrls && Array.isArray(discData.candidateUrls)) {
-                for (const u of discData.candidateUrls) {
-                  if (u && !urlsToTest.includes(u)) urlsToTest.push(u);
+            }
+          } else {
+            // Server API unreachable (e.g. server restarting or network glitch)
+            // Gently probe the first candidate HLS URL as fallback
+            const fallbackUrl = candidateHlsUrls[0];
+            if (fallbackUrl) {
+              const probeUrl = fallbackUrl + (fallbackUrl.includes('?') ? '&' : '?') + '_probe=' + Date.now();
+              const probeRes = await safeFetch(probeUrl, {
+                headers: { 'Accept': 'application/x-mpegURL, application/vnd.apple.mpegurl, */*' }
+              }, 2000);
+
+              if (probeRes && probeRes.ok && probeRes.status === 200) {
+                const text = await probeRes.text();
+                const trimmed = text ? text.trim() : '';
+                if (trimmed.startsWith('#EXTM3U') && !trimmed.includes('<html') && !trimmed.includes('<!DOCTYPE')) {
+                  console.log('[StreamPulse Player] Fallback stream confirmed at:', fallbackUrl);
+                  foundLiveStream = true;
+                  isPollCycleRunning = false;
+                  switchToLiveHls(fallbackUrl);
+                  return;
                 }
               }
             }
+            consecutiveOfflineCycles++;
           }
-        } catch (e) {}
-
-        // 2. Authoritative Verification: Probe HLS playlists for #EXTM3U
-        for (const testUrl of urlsToTest) {
-          if (currentState === 'LIVE') {
-            isPollCycleRunning = false;
-            return;
-          }
-
-          try {
-            const probeUrl = testUrl + (testUrl.includes('?') ? '&' : '?') + '_probe=' + Date.now();
-            const res = await safeFetch(probeUrl, {
-              headers: { 'Accept': 'application/x-mpegURL, application/vnd.apple.mpegurl, */*' }
-            }, 2500);
-
-            if (res && res.ok && res.status === 200) {
-              const text = await res.text();
-              const trimmed = text ? text.trim() : '';
-              if (trimmed.startsWith('#EXTM3U') && !trimmed.includes('<html') && !trimmed.includes('<!DOCTYPE') && !trimmed.includes('{"status"')) {
-                console.log('[StreamPulse Player] Valid #EXTM3U playlist verified at:', testUrl);
-                if (!candidateHlsUrls.includes(testUrl)) {
-                  candidateHlsUrls.unshift(testUrl);
-                  if (candidateHlsUrls.length > 8) candidateHlsUrls.length = 8;
-                }
-                isPollCycleRunning = false;
-                switchToLiveHls(testUrl);
-                return;
-              }
-            }
-          } catch (e) {}
+        } catch (e) {
+          consecutiveOfflineCycles++;
         }
 
         isPollCycleRunning = false;
 
-        // Schedule next poll cycle with controlled backoff (2s -> 3.5s -> 4.5s max)
+        // Schedule next poll cycle with smooth, calm backoff (2.5s -> 4s -> 6s -> max 8s)
         if (currentState === 'STANDBY') {
-          consecutiveOfflineCycles++;
-          const nextDelay = Math.min(2000 + (consecutiveOfflineCycles > 3 ? 1500 : 0), 4500);
+          let nextDelay = 2500;
+          if (consecutiveOfflineCycles > 20) {
+            nextDelay = 8000;
+          } else if (consecutiveOfflineCycles > 8) {
+            nextDelay = 5000;
+          } else if (consecutiveOfflineCycles > 3) {
+            nextDelay = 3500;
+          }
           scheduleNextPoll(nextDelay);
         }
       }
@@ -1266,7 +1327,7 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       function scheduleNextPoll(delayMs) {
         stopStreamPolling();
         if (currentState === 'STANDBY') {
-          nextPollTimeoutId = setTimeout(runPollCycle, delayMs || 2000);
+          nextPollTimeoutId = setTimeout(runPollCycle, delayMs || 2500);
         }
       }
 
@@ -1278,7 +1339,7 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       }
 
       // --------------------------------------------------
-      // Telemetry Heartbeat (Safe Single Timeout Loop)
+      // Telemetry Heartbeat (Safe Single Timeout Loop, 30s in Standby)
       // --------------------------------------------------
       async function sendHeartbeat() {
         if (serverUrl && serverUrl.startsWith('http')) {
@@ -1292,12 +1353,13 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
                 online_status: currentState === 'LIVE' ? 'playing' : 'offline_logo',
                 current_resolution: (liveVideo.videoWidth || 1920) + 'x' + (liveVideo.videoHeight || 1080),
                 engine: currentState === 'LIVE' ? 'HLS.js' : (mp4Failed ? 'HTML Canvas' : 'Motion Logo'),
-                player_version: '2.5.0-universal'
+                player_version: '2.5.1-universal'
               })
             }, 3000);
           } catch(e) {}
         }
-        heartbeatTimeoutId = setTimeout(sendHeartbeat, 15000);
+        const nextHb = currentState === 'LIVE' ? 15000 : 30000;
+        heartbeatTimeoutId = setTimeout(sendHeartbeat, nextHb);
       }
 
       // --------------------------------------------------
@@ -1569,7 +1631,6 @@ declare -a LAUNCH_ARGS=(
   "--ozone-platform=wayland"
   "--disable-gpu"
   "--disable-dev-shm-usage"
-  "--js-flags=--max-old-space-size=512"
   "--disk-cache-dir=/tmp/chromium-cache"
   "--disk-cache-size=33554432"
   "--media-cache-size=33554432"
@@ -1603,7 +1664,7 @@ declare -a LAUNCH_ARGS=(
 # 10. Authoritative Target URL: Integrated HTML5 Kiosk Player
 # ------------------------------------------------------------------------------
 LOCAL_PLAYER="file:///opt/streampulse/logo/player.html"
-TARGET_URL="${LOCAL_PLAYER}?channel=${CHANNEL_NAME}&server=${SERVER_URL}&key=${STREAM_KEY}"
+TARGET_URL="${LOCAL_PLAYER}?channel=${CHANNEL_NAME}&server=${SERVER_URL}"
 
 # Support explicit custom non-default URLs if specifically configured
 if [[ -n "${DASHBOARD_URL:-}" ]] && [[ "${DASHBOARD_URL}" =~ ^https?:// ]] && [[ "${DASHBOARD_URL}" != "http://187.127.210.81/" ]] && [[ "${DASHBOARD_URL}" != "http://187.127.210.81" ]] && [[ "${DASHBOARD_URL}" != *"127.0.0.1"* ]] && [[ "${DASHBOARD_URL}" != *"localhost"* ]]; then

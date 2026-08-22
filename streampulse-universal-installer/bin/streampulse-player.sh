@@ -150,7 +150,6 @@ declare -a LAUNCH_ARGS=(
   "--ozone-platform=wayland"
   "--disable-gpu"
   "--disable-dev-shm-usage"
-  "--js-flags=--max-old-space-size=512"
   "--disk-cache-dir=/tmp/chromium-cache"
   "--disk-cache-size=33554432"
   "--media-cache-size=33554432"
@@ -184,7 +183,7 @@ declare -a LAUNCH_ARGS=(
 # 10. Authoritative Target URL: Integrated HTML5 Kiosk Player
 # ------------------------------------------------------------------------------
 LOCAL_PLAYER="file:///opt/streampulse/logo/player.html"
-TARGET_URL="${LOCAL_PLAYER}?channel=${CHANNEL_NAME}&server=${SERVER_URL}&key=${STREAM_KEY}"
+TARGET_URL="${LOCAL_PLAYER}?channel=${CHANNEL_NAME}&server=${SERVER_URL}"
 
 # Support explicit custom non-default URLs if specifically configured
 if [[ -n "${DASHBOARD_URL:-}" ]] && [[ "${DASHBOARD_URL}" =~ ^https?:// ]] && [[ "${DASHBOARD_URL}" != "http://187.127.210.81/" ]] && [[ "${DASHBOARD_URL}" != "http://187.127.210.81" ]] && [[ "${DASHBOARD_URL}" != *"127.0.0.1"* ]] && [[ "${DASHBOARD_URL}" != *"localhost"* ]]; then

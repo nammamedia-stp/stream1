@@ -32,6 +32,7 @@ export interface UserRecord {
 export interface StreamRecord {
   id: string;
   userId: number;
+  channelId?: string;
   title: string;
   broadcaster: string;
   streamKey: string;
@@ -177,6 +178,7 @@ let localState: LocalDBState = {
     {
       id: '1',
       userId: 1,
+      channelId: 'channel1',
       title: 'Late Night Coding Sessions',
       broadcaster: 'dev_alex',
       viewers: 1240,
@@ -192,6 +194,7 @@ let localState: LocalDBState = {
     {
       id: '2',
       userId: 1,
+      channelId: 'channel2',
       title: 'E-Sports Tournament Qualifiers',
       broadcaster: 'pro_gaming_tv',
       viewers: 8520,
@@ -363,6 +366,7 @@ export const db = {
               start_time TIMESTAMP
             );
 
+            ALTER TABLE streams ADD COLUMN IF NOT EXISTS channel_id VARCHAR(100);
             ALTER TABLE streams ADD COLUMN IF NOT EXISTS width INTEGER;
             ALTER TABLE streams ADD COLUMN IF NOT EXISTS height INTEGER;
             ALTER TABLE streams ADD COLUMN IF NOT EXISTS fps INTEGER;
@@ -878,6 +882,7 @@ export const db = {
       return res.rows.map(r => ({
         id: r.id,
         userId: r.user_id,
+        channelId: r.channel_id || r.id,
         title: r.title,
         broadcaster: r.broadcaster,
         streamKey: r.stream_key,
@@ -930,6 +935,7 @@ export const db = {
       return {
         id: r.id,
         userId: r.user_id,
+        channelId: r.channel_id || r.id,
         title: r.title,
         broadcaster: r.broadcaster,
         streamKey: r.stream_key,
@@ -974,6 +980,69 @@ export const db = {
     return localState.streams.find(s => s.streamKey === streamKey) || null;
   },
 
+  getStreamByChannel: async (channelIdentifier: string): Promise<StreamRecord | null> => {
+    if (!channelIdentifier) return null;
+    const cleanId = channelIdentifier.trim().toLowerCase();
+    if (usePostgres && pgPool) {
+      const res = await pgPool.query(
+        'SELECT * FROM streams WHERE LOWER(channel_id) = $1 OR id = $2 OR stream_key = $2 OR LOWER(title) = $1 LIMIT 1',
+        [cleanId, channelIdentifier]
+      );
+      if (res.rows.length === 0) return null;
+      const r = res.rows[0];
+      return {
+        id: r.id,
+        userId: r.user_id,
+        channelId: r.channel_id || r.id,
+        title: r.title,
+        broadcaster: r.broadcaster,
+        streamKey: r.stream_key,
+        status: r.status,
+        scheduledStart: r.scheduled_start ? r.scheduled_start.toISOString() : undefined,
+        rtmpUrl: r.rtmp_url,
+        resolution: r.resolution,
+        bitrate: r.bitrate,
+        codec: r.codec,
+        ingestIp: r.ingest_ip,
+        viewers: r.viewers,
+        startTime: r.start_time ? r.start_time.toISOString() : undefined,
+        width: r.width,
+        height: r.height,
+        fps: r.fps,
+        aspectRatio: r.aspect_ratio,
+        videoCodec: r.video_codec,
+        audioCodec: r.audio_codec,
+        preset: r.preset,
+        profile: r.profile,
+        pixelFormat: r.pixel_format,
+        enabledProfiles: r.enabled_profiles,
+        gopSize: r.gop_size,
+        bufferSize: r.buffer_size,
+        maxBitrate: r.max_bitrate,
+        scalingAlgorithm: r.scaling_algorithm,
+        audioEnabled: r.audio_enabled,
+        audioBitrate: r.audio_bitrate,
+        audioSampleRate: r.audio_sample_rate,
+        audioChannels: r.audio_channels,
+        audioVolume: r.audio_volume,
+        audioNormalize: r.audio_normalize,
+        audioNoiseReduction: r.audio_noise_reduction,
+        audioDelay: r.audio_delay,
+        audioLanguage: r.audio_language,
+        audioTrackSelection: r.audio_track_selection,
+        audioPassthrough: r.audio_passthrough,
+        audioTranscoding: r.audio_transcoding,
+        profilesJson: r.profiles_json
+      };
+    }
+    return localState.streams.find(s => 
+      (s.channelId && s.channelId.toLowerCase() === cleanId) || 
+      s.id === channelIdentifier || 
+      s.streamKey === channelIdentifier ||
+      (s.title && s.title.toLowerCase() === cleanId)
+    ) || null;
+  },
+
   createStream: async (stream: Omit<StreamRecord, 'id' | 'viewers'>): Promise<StreamRecord> => {
     const id = Math.random().toString(36).substring(2, 11);
     
@@ -986,11 +1055,12 @@ export const db = {
     if (usePostgres && pgPool) {
       await pgPool.query(
         `INSERT INTO streams 
-         (id, user_id, title, broadcaster, stream_key, status, scheduled_start, rtmp_url, resolution, bitrate, codec, ingest_ip, viewers, start_time, width, height, fps, aspect_ratio, video_codec, audio_codec, preset, profile, pixel_format, enabled_profiles) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)`,
+         (id, user_id, channel_id, title, broadcaster, stream_key, status, scheduled_start, rtmp_url, resolution, bitrate, codec, ingest_ip, viewers, start_time, width, height, fps, aspect_ratio, video_codec, audio_codec, preset, profile, pixel_format, enabled_profiles) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)`,
         [
           id,
           dbStream.userId,
+          dbStream.channelId ?? null,
           dbStream.title,
           dbStream.broadcaster,
           dbStream.streamKey,
@@ -1033,6 +1103,7 @@ export const db = {
       
       const setClause = keys.map((key, index) => {
         const pgKey = key === 'userId' ? 'user_id' :
+                      key === 'channelId' ? 'channel_id' :
                       key === 'streamKey' ? 'stream_key' :
                       key === 'scheduledStart' ? 'scheduled_start' :
                       key === 'rtmpUrl' ? 'rtmp_url' :
@@ -1056,6 +1127,7 @@ export const db = {
       return {
         id: r.id,
         userId: r.user_id,
+        channelId: r.channel_id || r.id,
         title: r.title,
         broadcaster: r.broadcaster,
         streamKey: r.stream_key,

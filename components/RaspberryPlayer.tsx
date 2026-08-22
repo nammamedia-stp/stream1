@@ -155,7 +155,7 @@ export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams
         fetch(`/api/rpi-player/script/systemd`),
         fetch(`/api/rpi-player/script/autostart?streamKey=${activeKey}`),
         fetch(`/api/rpi-player/script/autoupdate`),
-        fetch(`/api/rpi-player/script/universal-install?channel=${encodeURIComponent(piChannel)}&streamKey=${encodeURIComponent(activeKey)}&dashboardUrl=${encodeURIComponent(kioskDashboardUrl)}`),
+        fetch(`/api/rpi-player/script/universal-install?channel=${encodeURIComponent(piChannel)}&dashboardUrl=${encodeURIComponent(kioskDashboardUrl)}`),
         fetch(`/api/rpi-player/script/set-channel`),
         fetch(`/api/rpi-player/script/kiosk-launcher?url=${encodeURIComponent(kioskDashboardUrl)}&user=${encodeURIComponent(kioskTargetUser)}`),
         fetch(`/api/rpi-player/script/universal-diagnose`),
@@ -182,7 +182,7 @@ export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams
         'set-channel': setChanRes.ok ? await setChanRes.text() : '',
         launcher: debLaunchRes.ok ? await debLaunchRes.text() : '',
         service: `[Unit]\nDescription=StreamPulse Dashboard Kiosk Service (Universal)\nDocumentation=https://streampulse.io\nAfter=network-online.target sound.target graphical-session.target graphical.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=${kioskTargetUser.includes('auto') ? 'DETECTED_USER' : kioskTargetUser}\nEnvironment=DISPLAY=:0\nEnvironment=WAYLAND_DISPLAY=wayland-0\nEnvironment=XDG_RUNTIME_DIR=/run/user/1000\nExecStart=/opt/streampulse/bin/dashboard-kiosk.sh\nRestart=always\nRestartSec=3\nKillMode=mixed\nTimeoutStopSec=10\n\n[Install]\nWantedBy=graphical.target default.target`,
-        'player-conf': `# StreamPulse Player & Channel Configuration\n# Path: /opt/streampulse/config/player.conf\n\nCHANNEL_NAME="${piChannel}"\nSTREAM_KEY="${activeKey}"\nSERVER_URL="http://187.127.210.81"\nLOGO_DIR="/opt/streampulse/logo"\nOFFLINE_LOGO_MEDIA="/opt/streampulse/logo/motion-logo.mp4"\nOFFLINE_FALLBACK_HTML="/opt/streampulse/logo/logo-fallback.html"\nPLAYBACK_MODE="auto"\nENABLE_HW_ACCEL=1\nAUDIO_OUTPUT="default"\nLAST_UPDATED="${new Date().toISOString()}"`,
+        'player-conf': `# StreamPulse Player & Channel Configuration\n# Managed by StreamPulse Universal Installer\n# Path: /opt/streampulse/config/player.conf\n\n# Assigned Pi Streaming Channel (Stable Identity)\nCHANNEL_NAME="${piChannel}"\n\n# StreamPulse Central Ingest / API Server URL\nSERVER_URL="http://187.127.210.81"\n\n# Common Logo & Media Assets Directory\nLOGO_DIR="/opt/streampulse/logo"\nOFFLINE_LOGO_MEDIA="/opt/streampulse/logo/motion-logo.mp4"\nOFFLINE_FALLBACK_HTML="/opt/streampulse/logo/logo-fallback.html"\n\n# Playback Mode (auto / stream_priority / logo_priority)\nPLAYBACK_MODE="auto"\n\n# Hardware Video Acceleration\nENABLE_HW_ACCEL=1\n\n# Audio Output Device\nAUDIO_OUTPUT="default"\n\n# Last Updated Timestamp\nLAST_UPDATED="${new Date().toISOString()}"`,
         'kiosk-conf': `# StreamPulse Master Kiosk Configuration\n# Path: /opt/streampulse/config/kiosk.conf\n\nDASHBOARD_URL="${kioskDashboardUrl}"\nKIOSK_USER="${kioskTargetUser.includes('auto') ? 'DETECTED_USER' : kioskTargetUser}"\nBROWSER_PROFILE_DIR="/opt/streampulse/chromium-profile"\nBROWSER_ENGINE="auto"\nSCREEN_WIDTH=1920\nSCREEN_HEIGHT=1080\nHIDE_CURSOR=1\nDISABLE_SCREEN_BLANKING=1\nWAIT_NETWORK_TIMEOUT=30\nRESTART_DELAY_SEC=3\nCHROMIUM_EXTRA_FLAGS=(\n  "--password-store=basic"\n  "--noerrdialogs"\n  "--disable-infobars"\n  "--kiosk"\n  "--start-fullscreen"\n  "--fullscreen"\n  "--no-first-run"\n  "--disable-restore-session-state"\n  "--disable-session-crashed-bubble"\n  "--autoplay-policy=no-user-gesture-required"\n  "--check-for-update-interval=31536000"\n  "--disable-component-update"\n  "--disable-features=TranslateUI"\n  "--disable-save-password-bubble"\n  "--allow-file-access-from-files"\n  "--disable-web-security"\n  "--disable-gpu"\n  "--window-position=0,0"\n  "--window-size=1920,1080"\n)`,
         diagnose: debDiagRes.ok ? await debDiagRes.text() : '',
         validate: debValRes.ok ? await debValRes.text() : '',
@@ -516,10 +516,10 @@ export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams
             </div>
 
             {/* Target Config Controls */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-950 border border-slate-800 rounded-lg p-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950 border border-slate-800 rounded-lg p-4">
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1">
-                  Assigned Pi Channel <span className="text-emerald-400 font-mono text-[10px]">(Per-Pi)</span>
+                  Assigned Pi Channel <span className="text-emerald-400 font-mono text-[10px]">(Stable Channel Identity)</span>
                 </label>
                 <input
                   type="text"
@@ -528,21 +528,6 @@ export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams
                   className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-indigo-400 font-mono focus:outline-none focus:border-indigo-500"
                   placeholder="e.g. channel1, auditorium, lobby"
                 />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Stream Key</label>
-                <select
-                  value={selectedStreamKey}
-                  onChange={(e) => setSelectedStreamKey(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-indigo-400 font-mono focus:outline-none focus:border-indigo-500"
-                >
-                  {streams.map((s) => (
-                    <option key={s.id} value={s.streamKey}>
-                      {s.title} ({s.streamKey})
-                    </option>
-                  ))}
-                  {streams.length === 0 && <option value="live_stream">Default (live_stream)</option>}
-                </select>
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1">Target Dashboard URL</label>
@@ -564,10 +549,10 @@ export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams
                 </label>
                 <div className="bg-slate-950 border border-emerald-500/30 rounded-lg p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 font-mono text-xs text-emerald-400">
                   <code className="select-all break-all">
-                    curl -fsSL "{window.location.origin}/api/rpi-player/script/universal-install?channel={encodeURIComponent(piChannel)}&streamKey={encodeURIComponent(selectedStreamKey || 'live_stream')}&dashboardUrl={encodeURIComponent(kioskDashboardUrl)}" | sudo bash
+                    curl -fsSL "{window.location.origin}/api/rpi-player/script/universal-install?channel={encodeURIComponent(piChannel)}&dashboardUrl={encodeURIComponent(kioskDashboardUrl)}" | sudo bash
                   </code>
                   <CopyButton
-                    text={`curl -fsSL "${window.location.origin}/api/rpi-player/script/universal-install?channel=${encodeURIComponent(piChannel)}&streamKey=${encodeURIComponent(selectedStreamKey || 'live_stream')}&dashboardUrl=${encodeURIComponent(kioskDashboardUrl)}" | sudo bash`}
+                    text={`curl -fsSL "${window.location.origin}/api/rpi-player/script/universal-install?channel=${encodeURIComponent(piChannel)}&dashboardUrl=${encodeURIComponent(kioskDashboardUrl)}" | sudo bash`}
                     label="Copy Master Command"
                   />
                 </div>
@@ -579,10 +564,10 @@ export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams
                 </label>
                 <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 font-mono text-xs text-slate-300">
                   <code className="select-all break-all">
-                    curl -fsSL "{window.location.origin}/api/rpi-player/script/universal-install" | sudo bash -s -- --channel "{piChannel}" --stream-key "{selectedStreamKey || 'live_stream'}" --dashboard-url "{kioskDashboardUrl}"
+                    curl -fsSL "{window.location.origin}/api/rpi-player/script/universal-install" | sudo bash -s -- --channel "{piChannel}" --dashboard-url "{kioskDashboardUrl}"
                   </code>
                   <CopyButton
-                    text={`curl -fsSL "${window.location.origin}/api/rpi-player/script/universal-install" | sudo bash -s -- --channel "${piChannel}" --stream-key "${selectedStreamKey || 'live_stream'}" --dashboard-url "${kioskDashboardUrl}"`}
+                    text={`curl -fsSL "${window.location.origin}/api/rpi-player/script/universal-install" | sudo bash -s -- --channel "${piChannel}" --dashboard-url "${kioskDashboardUrl}"`}
                     label="Copy CLI Command"
                   />
                 </div>

@@ -1,6 +1,7 @@
 
 export interface StreamSession {
   id: string;
+  channelId?: string;
   title: string;
   broadcaster: string;
   viewers: number;

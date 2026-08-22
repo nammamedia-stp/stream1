@@ -1855,6 +1855,7 @@ async function startServer() {
 
     return {
       ...s,
+      channelId: s.channelId || s.id,
       rtmpUrl: dynamicRtmpUrl,
       ingestIp: dynamicIngestIp,
       playbackUrls: {
@@ -2980,13 +2981,53 @@ async function startServer() {
       : (serverSettings.streaming?.defaultEnabledProfiles || 'Original');
 
     try {
-      // Auto-generate secure random stream key
+      const existingStreams = await db.getStreams();
+
+      // Determine stable channel identity
+      let targetChannelId = (req.body.channelId || req.body.channel || '').toString().trim();
+      if (!targetChannelId) {
+        const match = title.match(/^channel[\s-_]?([0-9]+)$/i);
+        if (match) {
+          targetChannelId = `channel${match[1]}`;
+        } else {
+          // Find lowest available channelN starting from channel1 (e.g. channel1, channel2, ...)
+          const usedNumbers = new Set<number>();
+          for (const s of existingStreams) {
+            const chId = s.channelId || s.id;
+            const m = chId.match(/^channel([0-9]+)$/i);
+            if (m) usedNumbers.add(parseInt(m[1], 10));
+          }
+          let n = 1;
+          while (usedNumbers.has(n)) {
+            n++;
+          }
+          targetChannelId = `channel${n}`;
+        }
+      }
+
+      // Normalize channel ID (e.g. channel1, channel2, sports_main)
+      const normalizedChannelId = targetChannelId.toLowerCase().replace(/[^a-z0-9_-]/g, '') || 'channel1';
+
+      // Check for duplicate stable channel identity across all existing streams
+      const isDuplicate = existingStreams.some(s => {
+        const existingCh = (s.channelId || s.id || '').toLowerCase();
+        return existingCh === normalizedChannelId;
+      });
+
+      if (isDuplicate) {
+        return res.status(400).json({ 
+          error: `Channel identifier '${normalizedChannelId}' is already in use. Duplicate channel identities are not permitted.` 
+        });
+      }
+
+      // Auto-generate secure random broadcast session key (temporary)
       const streamKey = 'live_' + Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
       const ingestIp = '127.0.0.1';
       const rtmpUrl = `rtmp://localhost/ingest`;
 
       const newStream = await db.createStream({
         userId: req.user.id,
+        channelId: normalizedChannelId,
         title,
         broadcaster,
         streamKey,
@@ -3706,23 +3747,27 @@ async function startServer() {
       let resolvedStream: any = null;
       let isLive = false;
 
-      // 1. Direct match by stream key if provided
-      if (requestedKey) {
-        resolvedStream = allStreams.find(s => (s.streamKey === requestedKey || (s as any).stream_key === requestedKey || s.id === requestedKey));
+      // 1. Primary Resolution: Match by persistent channel identity if provided
+      if (requestedChannel) {
+        const cleanChannel = requestedChannel.toLowerCase();
+        resolvedStream = allStreams.find(s => 
+          (s.channelId && s.channelId.toLowerCase() === cleanChannel) ||
+          s.id.toLowerCase() === cleanChannel ||
+          (s.title && s.title.toLowerCase() === cleanChannel) ||
+          (cleanChannel === 'channel1' && ((s as any).is_primary || s.id === '1' || (s.channelId && s.channelId.toLowerCase() === 'channel1')))
+        );
+        if (!resolvedStream && cleanChannel.startsWith('channel')) {
+          // If channel was specified but not found, try to match by position
+          const num = parseInt(cleanChannel.replace('channel', ''), 10);
+          if (!isNaN(num) && num >= 1 && num <= allStreams.length) {
+            resolvedStream = allStreams[num - 1];
+          }
+        }
       }
 
-      // 2. Match by channel if key wasn't specified or didn't match
-      if (!resolvedStream && requestedChannel) {
-        resolvedStream = allStreams.find(s => 
-          s.id === requestedChannel ||
-          s.streamKey === requestedChannel ||
-          (s as any).stream_key === requestedChannel ||
-          (s.title && s.title.toLowerCase() === requestedChannel.toLowerCase()) ||
-          (requestedChannel === 'channel1' && ((s as any).is_primary || s.id === '1'))
-        );
-        if (!resolvedStream && requestedChannel.toLowerCase().includes('channel')) {
-          resolvedStream = allStreams[0] || null;
-        }
+      // 2. Secondary Resolution: Match by broadcast session key if channel wasn't provided or didn't match
+      if (!resolvedStream && requestedKey) {
+        resolvedStream = allStreams.find(s => (s.streamKey === requestedKey || (s as any).stream_key === requestedKey || s.id === requestedKey));
       }
 
       // 3. Determine if the resolved stream is currently live
@@ -3734,9 +3779,8 @@ async function startServer() {
         isLive = hasRtmp || hasDbLive || hasHls;
       }
 
-      // 4. If resolved stream is not live (or no stream resolved), search for any actively broadcasting stream
-      if (!isLive) {
-        // Check active RTMP sessions first
+      // 4. If no stream resolved yet, search for any active live broadcast session
+      if (!resolvedStream) {
         for (const activeKey of activeKeys) {
           const matchingDb = allStreams.find(s => (s.streamKey === activeKey || (s as any).stream_key === activeKey));
           if (matchingDb) {
@@ -3746,6 +3790,7 @@ async function startServer() {
           } else if (checkHlsOnDisk(activeKey)) {
             resolvedStream = {
               id: activeKey,
+              channelId: 'channel1',
               title: 'Active Live Stream',
               streamKey: activeKey,
               status: 'live'
@@ -3755,8 +3800,7 @@ async function startServer() {
           }
         }
 
-        // Check DB live status
-        if (!isLive) {
+        if (!resolvedStream) {
           const liveDbStream = allStreams.find(s => s.status === 'live');
           if (liveDbStream) {
             resolvedStream = liveDbStream;
@@ -3764,8 +3808,7 @@ async function startServer() {
           }
         }
 
-        // Check disk HLS files for all streams
-        if (!isLive) {
+        if (!resolvedStream) {
           for (const s of allStreams) {
             const candidateK = s.streamKey || (s as any).stream_key;
             if (candidateK && checkHlsOnDisk(candidateK)) {
@@ -3781,6 +3824,7 @@ async function startServer() {
       if (!resolvedStream) {
         resolvedStream = allStreams[0] || {
           id: '1',
+          channelId: requestedChannel || 'channel1',
           title: requestedChannel || 'Default Channel',
           streamKey: requestedKey || 'live_stream',
           status: 'offline'
@@ -3788,12 +3832,16 @@ async function startServer() {
       }
 
       const streamKey = resolvedStream.streamKey || (resolvedStream as any).stream_key || 'live_stream';
-      const channelName = requestedChannel || resolvedStream.title || 'channel1';
+      const channelId = resolvedStream.channelId || resolvedStream.id || 'channel1';
+      const channelName = requestedChannel || resolvedStream.channelId || resolvedStream.title || 'channel1';
 
       const candidateUrls = [
         `${protoHost}/hls/${streamKey}/master.m3u8`,
         `${protoHost}/hls/${streamKey}/Original/index.m3u8`,
         `${protoHost}/hls/${streamKey}/index.m3u8`,
+        `${protoHost}/hls/${channelId}/master.m3u8`,
+        `${protoHost}/hls/${channelId}/Original/index.m3u8`,
+        `${protoHost}/hls/${channelId}/index.m3u8`,
         `${protoHost}/hls/${channelName}/master.m3u8`,
         `${protoHost}/hls/${channelName}/Original/index.m3u8`,
         `${protoHost}/hls/${channelName}/index.m3u8`
@@ -3804,7 +3852,7 @@ async function startServer() {
         status: isLive ? 'live' : 'offline',
         isLive,
         channel: channelName,
-        channelId: resolvedStream.id,
+        channelId: channelId,
         streamKey,
         title: resolvedStream.title || 'StreamPulse Channel',
         hlsMasterUrl: `${protoHost}/hls/${streamKey}/master.m3u8`,

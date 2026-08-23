@@ -844,8 +844,9 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
         ] : [])
       ].filter((url, idx, arr) => url && arr.indexOf(url) === idx);
 
-      // State Machine Variables
-      let currentState = 'STANDBY'; // 'STANDBY' | 'LIVE'
+      // State Machine Variables: 'OFFLINE' | 'LIVE_CONNECTING' | 'LIVE_PLAYING'
+      let currentState = 'OFFLINE';
+      let currentSessionKey = '';
       let activeHlsUrl = '';
       let hlsInstance = null;
       let isPollCycleRunning = false;
@@ -858,6 +859,7 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       let stallCount = 0;
       let lastPlayheadTime = -1;
       let heartbeatTimeoutId = null;
+      let connectionTimeoutId = null;
 
       // --------------------------------------------------
       // UI / Cursor Auto-Hide & Status Badge Helpers
@@ -973,7 +975,7 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       }
 
       function tryUnmute() {
-        if (currentState === 'LIVE' && liveVideo) {
+        if (currentState === 'LIVE_PLAYING' && liveVideo) {
           liveVideo.muted = false;
         }
       }
@@ -996,7 +998,7 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
           try {
             if (motionVideo.paused) {
               safePlay(motionVideo).then(ok => {
-                if (!ok && currentState === 'STANDBY') handleMp4Failure();
+                if (!ok && currentState === 'OFFLINE') handleMp4Failure();
               });
             }
           } catch(e) {}
@@ -1033,20 +1035,20 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       motionVideo.addEventListener('error', handleMp4Failure);
 
       motionVideo.addEventListener('playing', () => {
-        if (currentState === 'STANDBY' && !mp4Failed) {
+        if (currentState === 'OFFLINE' && !mp4Failed) {
           motionVideo.classList.remove('hidden');
           motionVideo.style.display = '';
           htmlFallback.classList.remove('active');
         }
       });
       motionVideo.addEventListener('ended', () => {
-        if (currentState === 'STANDBY' && !mp4Failed) {
+        if (currentState === 'OFFLINE' && !mp4Failed) {
           motionVideo.currentTime = 0;
           safePlay(motionVideo);
         }
       });
       motionVideo.addEventListener('stalled', () => {
-        if (currentState === 'STANDBY' && !mp4Failed && motionVideo.paused) {
+        if (currentState === 'OFFLINE' && !mp4Failed && motionVideo.paused) {
           safePlay(motionVideo);
         }
       });
@@ -1055,10 +1057,20 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       // Visual Activation of Live Stream Video
       // --------------------------------------------------
       function activateLiveDisplay() {
-        if (currentState !== 'LIVE') return;
+        if (currentState === 'OFFLINE') return;
+        if (connectionTimeoutId) {
+          clearTimeout(connectionTimeoutId);
+          connectionTimeoutId = null;
+        }
+
+        if (currentState !== 'LIVE_PLAYING') {
+          currentState = 'LIVE_PLAYING';
+          console.log('[StreamPulse][STATE] Transition -> LIVE_PLAYING (session=' + currentSessionKey + ')');
+        }
+
         if (liveVideo.classList.contains('active') && motionVideo.classList.contains('hidden')) return;
 
-        console.log('[StreamPulse][LIVE] Activating live video element visually. (currentTime=' + liveVideo.currentTime + ', readyState=' + liveVideo.readyState + ')');
+        console.log('[StreamPulse][VIDEO] Live video visible. (currentTime=' + liveVideo.currentTime + ', readyState=' + liveVideo.readyState + ')');
 
         motionVideo.classList.add('hidden');
         htmlFallback.classList.remove('active');
@@ -1077,6 +1089,10 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       // --------------------------------------------------
       function destroyLivePlayer() {
         stopStallWatchdog();
+        if (connectionTimeoutId) {
+          clearTimeout(connectionTimeoutId);
+          connectionTimeoutId = null;
+        }
         stallCount = 0;
         activeHlsUrl = '';
 
@@ -1104,7 +1120,6 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
             if (liveVideo.srcObject) {
               liveVideo.srcObject = null;
             }
-            liveVideo.load();
           } catch (e) {}
         }
       }
@@ -1113,9 +1128,11 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       // STATE TRANSITION: Switch to Offline Standby (Zero Reload)
       // --------------------------------------------------
       function switchToOfflineStandby(reason) {
-        if (currentState === 'STANDBY') return;
-        currentState = 'STANDBY';
-        console.log('[StreamPulse][LIVE] Transitioning to offline standby. Reason:', reason || 'Stream Offline');
+        if (currentState === 'OFFLINE') return;
+        console.log('[StreamPulse][STATE] Transition -> OFFLINE. Reason:', reason || 'Stream Offline');
+        console.log('[StreamPulse][SESSION] Releasing active session key:', currentSessionKey || 'none');
+        currentState = 'OFFLINE';
+        currentSessionKey = '';
 
         // 1. Fully destroy live player instance
         destroyLivePlayer();
@@ -1140,24 +1157,34 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
         stallCount = 0;
 
         stallCheckTimer = setInterval(() => {
-          if (currentState !== 'LIVE' || !liveVideo) return;
+          if (currentState !== 'LIVE_PLAYING' || !liveVideo) return;
 
           const currentTime = liveVideo.currentTime;
           const isPaused = liveVideo.paused;
           const readyState = liveVideo.readyState;
 
-          // Only consider stalled if playback has started (currentTime > 0) and is stuck, or if paused unexpectedly
+          // Check if playback is paused or playhead is stuck
           if (isPaused || (currentTime > 0 && currentTime === lastPlayheadTime)) {
             stallCount++;
-            console.warn('[StreamPulse][STALL] Playback stall detected (' + stallCount + '/6, currentTime=' + currentTime + ', readyState=' + readyState + ', paused=' + isPaused + ')');
+            console.warn('[StreamPulse][STALL] Playback stall detected (' + stallCount + '/4, currentTime=' + currentTime + ', readyState=' + readyState + ', paused=' + isPaused + ')');
 
             safePlay(liveVideo);
 
-            if (stallCount === 2 && hlsInstance) {
-              try { hlsInstance.recoverMediaError(); safePlay(liveVideo); } catch(e) {}
+            if (stallCount === 2) {
+              // Immediately check discovery to see if stream ended or key rotated
+              console.log('[StreamPulse][RECOVERY] Probing stream discovery on stall count 2...');
+              runPollCycle();
             }
 
-            if (stallCount >= 6) {
+            if (stallCount === 3 && hlsInstance) {
+              try {
+                console.log('[StreamPulse][RECOVERY] Triggering HLS recoverMediaError...');
+                hlsInstance.recoverMediaError();
+                safePlay(liveVideo);
+              } catch(e) {}
+            }
+
+            if (stallCount >= 4) {
               console.warn('[StreamPulse][STALL] Video stalled consecutively. Transitioning to offline logo standby.');
               switchToOfflineStandby('Stream Inactive / Stalled');
               return;
@@ -1167,7 +1194,7 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
           }
 
           lastPlayheadTime = currentTime;
-        }, 4000);
+        }, 3000);
       }
 
       function stopStallWatchdog() {
@@ -1180,24 +1207,38 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
       // --------------------------------------------------
       // STATE TRANSITION: Switch to Live HLS
       // --------------------------------------------------
-      function switchToLiveHls(validHlsUrl) {
-        if (currentState === 'LIVE' && activeHlsUrl === validHlsUrl) return;
-        currentState = 'LIVE';
+      function switchToLiveHls(validHlsUrl, newStreamKey) {
+        if (currentState === 'LIVE_PLAYING' && activeHlsUrl === validHlsUrl && currentSessionKey === newStreamKey) return;
+
+        const previousState = currentState;
+        const previousKey = currentSessionKey;
+        currentState = 'LIVE_CONNECTING';
+        currentSessionKey = newStreamKey || currentSessionKey || channelName;
         activeHlsUrl = validHlsUrl;
-        console.log('[StreamPulse][LIVE] Entering LIVE state. HLS URL:', validHlsUrl);
 
-        // Stop polling immediately while in LIVE state
-        stopStreamPolling();
+        console.log('[StreamPulse][STATE] Transition -> LIVE_CONNECTING (prev state: ' + previousState + ')');
+        console.log('[StreamPulse][SESSION] Active session key: ' + currentSessionKey + (previousKey && previousKey !== currentSessionKey ? ' (rotated from ' + previousKey + ')' : ''));
+        console.log('[StreamPulse][HLS] Target HLS URL: ' + validHlsUrl);
 
-        // Destroy any prior HLS instance cleanly before creating a new one
+        // Destroy any prior HLS instance cleanly before creating a fresh one
         if (hlsInstance) {
           try {
+            console.log('[StreamPulse][HLS] Destroying prior HLS instance.');
             hlsInstance.stopLoad();
             hlsInstance.detachMedia();
             hlsInstance.destroy();
           } catch (e) {}
           hlsInstance = null;
         }
+
+        // Connection watchdog: If after 15s we have not transitioned to LIVE_PLAYING, recover cleanly
+        if (connectionTimeoutId) clearTimeout(connectionTimeoutId);
+        connectionTimeoutId = setTimeout(() => {
+          if (currentState === 'LIVE_CONNECTING') {
+            console.warn('[StreamPulse][RECOVERY] HLS connection attempt timed out after 15s. Returning to standby.');
+            switchToOfflineStandby('HLS Connection Timeout');
+          }
+        }, 15000);
 
         const cacheBustUrl = validHlsUrl + (validHlsUrl.includes('?') ? '&' : '?') + '_t=' + Date.now();
 
@@ -1218,7 +1259,7 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
           safePlay(liveVideo);
         };
         liveVideo.ontimeupdate = function() {
-          if (currentState === 'LIVE' && liveVideo.currentTime > 0) {
+          if ((currentState === 'LIVE_CONNECTING' || currentState === 'LIVE_PLAYING') && liveVideo.currentTime > 0) {
             activateLiveDisplay();
           }
         };
@@ -1227,7 +1268,7 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
         const MAX_HLS_NETWORK_RETRIES = 5;
 
         if (window.Hls && window.Hls.isSupported()) {
-          console.log('[StreamPulse][HLS] Initializing HLS.js engine for URL:', cacheBustUrl);
+          console.log('[StreamPulse][HLS] Initializing fresh HLS.js engine for URL:', cacheBustUrl);
           hlsInstance = new window.Hls({
             enableWorker: true,
             lowLatencyMode: false,
@@ -1271,9 +1312,9 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
           hlsInstance.on(window.Hls.Events.ERROR, function(event, data) {
             console.warn('[StreamPulse][HLS] Error event:', data ? (data.type + ' / ' + data.details) : 'unknown', 'fatal=' + (data && data.fatal));
             if (data && data.fatal) {
-              console.error('[StreamPulse][ERROR] Fatal HLS error encountered:', data.type, data.details);
+              console.error('[StreamPulse][ERROR] Fatal HLS error encountered: type=' + data.type + ', details=' + data.details);
               if (data.type === window.Hls.ErrorTypes.MEDIA_ERROR) {
-                console.log('[StreamPulse][HLS] Recovering from fatal media error...');
+                console.log('[StreamPulse][RECOVERY] Recovering from fatal media error via recoverMediaError()...');
                 try {
                   hlsInstance.recoverMediaError();
                   safePlay(liveVideo);
@@ -1284,7 +1325,7 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
               } else if (data.type === window.Hls.ErrorTypes.NETWORK_ERROR) {
                 hlsNetworkRetries++;
                 if (hlsNetworkRetries <= MAX_HLS_NETWORK_RETRIES) {
-                  console.warn('[StreamPulse][HLS] Network error retry (' + hlsNetworkRetries + '/' + MAX_HLS_NETWORK_RETRIES + '). Calling startLoad()...');
+                  console.warn('[StreamPulse][RECOVERY] Network error retry (' + hlsNetworkRetries + '/' + MAX_HLS_NETWORK_RETRIES + '). Calling startLoad()...');
                   try {
                     hlsInstance.startLoad();
                   } catch (e) {
@@ -1312,91 +1353,81 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
           switchToOfflineStandby('HLS Engine Missing');
           return;
         }
-      }
 
-      liveVideo.addEventListener('error', function() {
-        if (currentState === 'LIVE') {
-          switchToOfflineStandby('Live Video Element Error');
-        }
-      });
+        // Schedule background monitor poll (5s interval during LIVE)
+        scheduleNextPoll(5000);
+      }
 
       // --------------------------------------------------
       // Authoritative Single Polling Cycle (Bounded, Non-Leaking, Smart Discovery)
       // --------------------------------------------------
       async function runPollCycle() {
-        if (currentState === 'LIVE' || isPollCycleRunning) return;
+        if (isPollCycleRunning) return;
         isPollCycleRunning = true;
-
-        let foundLiveStream = false;
 
         try {
           // 1. Authoritative check via Discovery API
-          const discoveryUrl = serverUrl + '/api/stream/active?channel=' + encodeURIComponent(channelName) + (streamKey && streamKey !== 'live_stream' ? '&key=' + encodeURIComponent(streamKey) : '') + '&_t=' + Date.now();
-          console.log('[StreamPulse][DISCOVERY] Querying: ' + discoveryUrl);
+          const discoveryUrl = serverUrl + '/api/stream/active?channel=' + encodeURIComponent(channelName) + '&_t=' + Date.now();
+          console.log('[StreamPulse][DISCOVERY] Querying: ' + discoveryUrl + ' (currentState: ' + currentState + ')');
           const discRes = await safeFetch(discoveryUrl, { headers: { 'Accept': 'application/json' } }, 3500);
 
           if (discRes && discRes.ok && discRes.status === 200) {
             const discData = await discRes.json();
             if (discData) {
               console.log('[StreamPulse][DISCOVERY] Response:', 'isLive=' + discData.isLive, 'status=' + discData.status, 'streamKey=' + discData.streamKey, 'hlsMasterUrl=' + discData.hlsMasterUrl);
-              if (discData.isLive === true && (discData.status === 'live' || !discData.status || discData.status === 'LIVE')) {
-                // Channel is LIVE on server — resolve the authoritative URL
-                const targetUrl = discData.hlsMasterUrl || (discData.candidateUrls && discData.candidateUrls[0]) || (serverUrl + '/hls/' + (discData.streamKey || channelName) + '/master.m3u8');
-                console.log('[StreamPulse][LIVE] Detected live broadcast. Authoritative HLS URL:', targetUrl);
-                if (targetUrl) {
-                  const probeUrl = targetUrl + (targetUrl.includes('?') ? '&' : '?') + '_probe=' + Date.now();
-                  const probeRes = await safeFetch(probeUrl, {
-                    headers: { 'Accept': 'application/x-mpegURL, application/vnd.apple.mpegurl, */*' }
-                  }, 3000);
 
-                  let isValidManifest = false;
-                  if (probeRes && probeRes.ok && probeRes.status === 200) {
-                    const text = await probeRes.text();
-                    const trimmed = text ? text.trim() : '';
-                    if (trimmed.startsWith('#EXTM3U') && !trimmed.includes('<html') && !trimmed.includes('<!DOCTYPE')) {
-                      isValidManifest = true;
-                      console.log('[StreamPulse][LIVE] Manifest content probe verified #EXTM3U successfully.');
-                    } else {
-                      console.warn('[StreamPulse][LIVE] Manifest probe returned non-m3u8 content. Length:', trimmed.length);
-                    }
-                  } else {
-                    console.warn('[StreamPulse][LIVE] Manifest probe HTTP response not 200 (or timed out), but server discovery confirmed isLive: true.');
-                  }
+              const isServerLive = (discData.isLive === true && (discData.status === 'live' || !discData.status || discData.status === 'LIVE'));
 
-                  // If manifest probe passed OR server API explicitly confirmed isLive: true with an active stream
-                  if (isValidManifest || discData.isLive === true) {
-                    console.log('[StreamPulse][LIVE] Proceeding to live playback transition ->', targetUrl);
-                    foundLiveStream = true;
+              if (isServerLive) {
+                const targetKey = discData.streamKey || channelName;
+                const targetUrl = discData.hlsMasterUrl || (discData.candidateUrls && discData.candidateUrls[0]) || (serverUrl + '/hls/' + targetKey + '/master.m3u8');
+
+                if (currentState === 'OFFLINE') {
+                  console.log('[StreamPulse][LIVE] Detected live broadcast. Target URL:', targetUrl, 'Key:', targetKey);
+                  isPollCycleRunning = false;
+                  switchToLiveHls(targetUrl, targetKey);
+                  return;
+                } else if (currentState === 'LIVE_PLAYING' || currentState === 'LIVE_CONNECTING') {
+                  // Check for session rotation
+                  if (targetKey && currentSessionKey && targetKey !== currentSessionKey) {
+                    console.log('[StreamPulse][SESSION] Discovery detected new streamKey rotation from', currentSessionKey, 'to', targetKey);
                     isPollCycleRunning = false;
-                    switchToLiveHls(targetUrl);
+                    switchToLiveHls(targetUrl, targetKey);
                     return;
                   }
                 }
+                consecutiveOfflineCycles = 0;
               } else {
-                // Server confirmed channel is OFFLINE: Do NOT probe candidate URLs (avoids 404 flood)
+                // Server confirmed channel is OFFLINE
+                if (currentState === 'LIVE_PLAYING' || currentState === 'LIVE_CONNECTING') {
+                  console.log('[StreamPulse][STATE] Discovery reports channel is OFFLINE while in ' + currentState + '. Transitioning to Standby.');
+                  isPollCycleRunning = false;
+                  switchToOfflineStandby('Discovery: stream offline');
+                  return;
+                }
                 consecutiveOfflineCycles++;
               }
             }
           } else {
-            console.warn('[StreamPulse][DISCOVERY] Discovery API unreachable. Probing fallback candidate URLs...');
-            // Server API unreachable (e.g. server restarting or network glitch)
-            // Gently probe the first candidate HLS URL as fallback
-            const fallbackUrl = candidateHlsUrls[0];
-            if (fallbackUrl) {
-              const probeUrl = fallbackUrl + (fallbackUrl.includes('?') ? '&' : '?') + '_probe=' + Date.now();
-              const probeRes = await safeFetch(probeUrl, {
-                headers: { 'Accept': 'application/x-mpegURL, application/vnd.apple.mpegurl, */*' }
-              }, 2500);
+            console.warn('[StreamPulse][DISCOVERY] Discovery API unreachable (HTTP or network issue).');
+            if (currentState === 'OFFLINE') {
+              // Server API unreachable fallback: probe the first candidate HLS URL
+              const fallbackUrl = candidateHlsUrls[0];
+              if (fallbackUrl) {
+                const probeUrl = fallbackUrl + (fallbackUrl.includes('?') ? '&' : '?') + '_probe=' + Date.now();
+                const probeRes = await safeFetch(probeUrl, {
+                  headers: { 'Accept': 'application/x-mpegURL, application/vnd.apple.mpegurl, */*' }
+                }, 2500);
 
-              if (probeRes && probeRes.ok && probeRes.status === 200) {
-                const text = await probeRes.text();
-                const trimmed = text ? text.trim() : '';
-                if (trimmed.startsWith('#EXTM3U') && !trimmed.includes('<html') && !trimmed.includes('<!DOCTYPE')) {
-                  console.log('[StreamPulse][LIVE] Fallback stream confirmed at:', fallbackUrl);
-                  foundLiveStream = true;
-                  isPollCycleRunning = false;
-                  switchToLiveHls(fallbackUrl);
-                  return;
+                if (probeRes && probeRes.ok && probeRes.status === 200) {
+                  const text = await probeRes.text();
+                  const trimmed = text ? text.trim() : '';
+                  if (trimmed.startsWith('#EXTM3U') && !trimmed.includes('<html') && !trimmed.includes('<!DOCTYPE')) {
+                    console.log('[StreamPulse][LIVE] Fallback stream confirmed at:', fallbackUrl);
+                    isPollCycleRunning = false;
+                    switchToLiveHls(fallbackUrl, channelName);
+                    return;
+                  }
                 }
               }
             }
@@ -1409,8 +1440,10 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
 
         isPollCycleRunning = false;
 
-        // Schedule next poll cycle with smooth, calm backoff (2.5s -> 4s -> 6s -> max 8s)
-        if (currentState === 'STANDBY') {
+        // Schedule next poll cycle:
+        // In OFFLINE: 2.5s -> 3.5s -> 5s -> max 8s
+        // In LIVE_CONNECTING / LIVE_PLAYING: 5s background monitor
+        if (currentState === 'OFFLINE') {
           let nextDelay = 2500;
           if (consecutiveOfflineCycles > 20) {
             nextDelay = 8000;
@@ -1420,14 +1453,14 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
             nextDelay = 3500;
           }
           scheduleNextPoll(nextDelay);
+        } else {
+          scheduleNextPoll(5000);
         }
       }
 
       function scheduleNextPoll(delayMs) {
         stopStreamPolling();
-        if (currentState === 'STANDBY') {
-          nextPollTimeoutId = setTimeout(runPollCycle, delayMs || 2500);
-        }
+        nextPollTimeoutId = setTimeout(runPollCycle, delayMs || 2500);
       }
 
       function stopStreamPolling() {
@@ -1448,16 +1481,16 @@ cat << 'HTML' > /opt/streampulse/logo/player.html
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 channel: channelName,
-                streamKey: streamKey,
-                online_status: currentState === 'LIVE' ? 'playing' : 'offline_logo',
+                streamKey: currentSessionKey || streamKey,
+                online_status: currentState === 'LIVE_PLAYING' ? 'playing' : (currentState === 'LIVE_CONNECTING' ? 'connecting' : 'offline_logo'),
                 current_resolution: (liveVideo.videoWidth || 1920) + 'x' + (liveVideo.videoHeight || 1080),
-                engine: currentState === 'LIVE' ? 'HLS.js' : (mp4Failed ? 'HTML Canvas' : 'Motion Logo'),
-                player_version: '2.5.1-universal'
+                engine: (currentState === 'LIVE_PLAYING' || currentState === 'LIVE_CONNECTING') ? 'HLS.js' : (mp4Failed ? 'HTML Canvas' : 'Motion Logo'),
+                player_version: '2.5.2-universal'
               })
             }, 3000);
           } catch(e) {}
         }
-        const nextHb = currentState === 'LIVE' ? 15000 : 30000;
+        const nextHb = (currentState === 'LIVE_PLAYING' || currentState === 'LIVE_CONNECTING') ? 15000 : 30000;
         heartbeatTimeoutId = setTimeout(sendHeartbeat, nextHb);
       }
 

@@ -2296,7 +2296,7 @@ exit 0
 EOF_UPDATE
 
 # Write authoritative VERSION file
-echo "2.4.0" > /opt/streampulse/VERSION
+echo "2.4.1" > /opt/streampulse/VERSION
 chmod 644 /opt/streampulse/VERSION
 
 # --- 10.7 validate.sh ---

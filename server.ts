@@ -162,6 +162,19 @@ async function startServer() {
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
+  // Enable CORS for API routes (required for Raspberry Pi kiosk player running from file://)
+  app.use('/api', (req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Date');
+
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(204);
+    }
+    next();
+  });
+
   // Clean leftover HLS directories on server startup and reset active streams
   const hlsPath = path.resolve('./data/hls');
   if (fs.existsSync(hlsPath)) {
@@ -3714,6 +3727,15 @@ async function startServer() {
     '/api/rpi-player/stream-info',
     '/api/rpi-player/active-stream'
   ], async (req: any, res: any) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Date');
+
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(204);
+    }
+
     try {
       const host = (req.headers['x-forwarded-host'] || req.headers.host || '187.127.210.81').toString();
       const isHttps = req.headers['x-forwarded-proto'] === 'https' || req.protocol === 'https' || req.secure;

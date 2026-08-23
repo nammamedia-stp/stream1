@@ -19,15 +19,15 @@ let fullInstall = fs.readFileSync(path.join(installerDir, 'full-install.sh'), 'u
 
 // Replace embedded player.html
 const playerHtmlRegex = /cat << 'HTML' > \/opt\/streampulse\/logo\/player\.html\n[\s\S]*?\nHTML\n/m;
-fullInstall = fullInstall.replace(playerHtmlRegex, `cat << 'HTML' > /opt/streampulse/logo/player.html\n${playerHtml}\nHTML\n`);
+fullInstall = fullInstall.replace(playerHtmlRegex, () => `cat << 'HTML' > /opt/streampulse/logo/player.html\n${playerHtml}\nHTML\n`);
 
 // Replace embedded streampulse-player.sh
 const playerShRegex = /cat << 'EOF_PLAYER' > \/opt\/streampulse\/bin\/streampulse-player\.sh\n[\s\S]*?\nEOF_PLAYER\n/m;
-fullInstall = fullInstall.replace(playerShRegex, `cat << 'EOF_PLAYER' > /opt/streampulse/bin/streampulse-player.sh\n${streampulsePlayerSh}\nEOF_PLAYER\n`);
+fullInstall = fullInstall.replace(playerShRegex, () => `cat << 'EOF_PLAYER' > /opt/streampulse/bin/streampulse-player.sh\n${streampulsePlayerSh}\nEOF_PLAYER\n`);
 
 // Replace embedded validate.sh
 const validateShRegex = /cat << 'EOF_VALIDATE' > \/opt\/streampulse\/bin\/validate\.sh\n[\s\S]*?\nEOF_VALIDATE\n/m;
-fullInstall = fullInstall.replace(validateShRegex, `cat << 'EOF_VALIDATE' > /opt/streampulse/bin/validate.sh\n${validateSh}\nEOF_VALIDATE\n`);
+fullInstall = fullInstall.replace(validateShRegex, () => `cat << 'EOF_VALIDATE' > /opt/streampulse/bin/validate.sh\n${validateSh}\nEOF_VALIDATE\n`);
 
 // Write updated full-install.sh
 fs.writeFileSync(path.join(installerDir, 'full-install.sh'), fullInstall, 'utf-8');

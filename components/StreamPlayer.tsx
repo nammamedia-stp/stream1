@@ -2540,7 +2540,18 @@ const StreamPlayer: React.FC<StreamPlayerProps> = ({
             </div>
           ) : (
             <div className="flex-1 min-w-0">
-              <h3 className="font-bold text-sm sm:text-base line-clamp-1 text-zinc-100">{stream.title}</h3>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-bold text-sm sm:text-base line-clamp-1 text-zinc-100">
+                  {stream.channelId && !stream.title.toLowerCase().startsWith('channel')
+                    ? `Channel ${stream.channelId.replace(/\D/g, '') || stream.channelId} — ${stream.title}`
+                    : stream.title}
+                </h3>
+                {stream.channelId && (
+                  <span className="px-1.5 py-0.5 rounded text-[8px] sm:text-[9px] font-mono font-bold bg-indigo-950/80 text-indigo-300 border border-indigo-800/80 shadow-sm shrink-0">
+                    Stable ID: {stream.channelId}
+                  </span>
+                )}
+              </div>
               <div className="flex items-center flex-wrap gap-x-2 gap-y-0.5 mt-0.5">
                  <p className="text-[10px] sm:text-xs text-zinc-400 font-medium truncate max-w-[100px] sm:max-w-none">@{stream.broadcaster}</p>
                  <span className="hidden xs:inline w-1 h-1 bg-zinc-700 rounded-full"></span>

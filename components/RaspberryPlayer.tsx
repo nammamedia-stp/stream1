@@ -78,6 +78,63 @@ export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams
   const [debianScriptTab, setDebianScriptTab] = useState<'universal-install' | 'set-channel' | 'launcher' | 'service' | 'player-conf' | 'kiosk-conf' | 'validate' | 'diagnose' | 'backup' | 'restore' | 'uninstall'>('universal-install');
   const [debianScriptContents, setDebianScriptContents] = useState<Record<string, string>>({});
 
+  // Channel selector options (Available + Occupied with Stable Identity)
+  const channelOptions = React.useMemo(() => {
+    const occupiedMap = new Map<number, StreamSession>();
+    const customStreams: StreamSession[] = [];
+    let maxOccupiedNum = 0;
+
+    streams.forEach(s => {
+      const chId = (s.channelId || s.id || '').trim();
+      const m = chId.match(/^channel([0-9]+)$/i);
+      if (m) {
+        const num = parseInt(m[1], 10);
+        occupiedMap.set(num, s);
+        if (num > maxOccupiedNum) maxOccupiedNum = num;
+      } else {
+        customStreams.push(s);
+      }
+    });
+
+    const totalSlots = Math.max(3, maxOccupiedNum + 1);
+    const options: { value: string; label: string; occupied: boolean; title?: string }[] = [];
+
+    for (let n = 1; n <= totalSlots; n++) {
+      const stableId = `channel${n}`;
+      if (occupiedMap.has(n)) {
+        const s = occupiedMap.get(n)!;
+        let displayName = s.title.trim();
+        if (!displayName.toLowerCase().startsWith('channel')) {
+          displayName = `Channel ${n} — ${displayName}`;
+        }
+        options.push({
+          value: stableId,
+          label: `${displayName} (Stable ID: ${stableId})`,
+          occupied: true,
+          title: s.title
+        });
+      } else {
+        options.push({
+          value: stableId,
+          label: `Channel ${n} — Available`,
+          occupied: false
+        });
+      }
+    }
+
+    customStreams.forEach(s => {
+      const chId = s.channelId || s.id;
+      options.push({
+        value: chId,
+        label: `${s.title} (Stable ID: ${chId})`,
+        occupied: true,
+        title: s.title
+      });
+    });
+
+    return options;
+  }, [streams]);
+
   // Configuration state
   const [rpiConfig, setRpiConfig] = useState<RpiConfig>({
     defaultStreamKey: '',
@@ -214,6 +271,29 @@ export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams
         .then(t => setScriptContents(prev => ({ ...prev, kiosk: t })));
     }
   }, [selectedStreamKey]);
+
+  // Dynamically refresh universal installer and config previews when channel or URL changes
+  useEffect(() => {
+    let active = true;
+    const updatePreviews = async () => {
+      try {
+        const res = await fetch(`/api/rpi-player/script/universal-install?channel=${encodeURIComponent(piChannel)}&dashboardUrl=${encodeURIComponent(kioskDashboardUrl)}`);
+        if (res.ok && active) {
+          const scriptText = await res.text();
+          setDebianScriptContents(prev => ({
+            ...prev,
+            'universal-install': scriptText,
+            'player-conf': `# StreamPulse Player & Channel Configuration\n# Managed by StreamPulse Universal Installer\n# Path: /opt/streampulse/config/player.conf\n\n# Assigned Pi Streaming Channel (Stable Identity)\nCHANNEL_NAME="${piChannel}"\n\n# StreamPulse Central Ingest / API Server URL\nSERVER_URL="http://187.127.210.81"\n\n# Common Logo & Media Assets Directory\nLOGO_DIR="/opt/streampulse/logo"\nOFFLINE_LOGO_MEDIA="/opt/streampulse/logo/motion-logo.mp4"\nOFFLINE_FALLBACK_HTML="/opt/streampulse/logo/logo-fallback.html"\n\n# Playback Mode (auto / stream_priority / logo_priority)\nPLAYBACK_MODE="auto"\n\n# Hardware Video Acceleration\nENABLE_HW_ACCEL=1\n\n# Audio Output Device\nAUDIO_OUTPUT="default"\n\n# Last Updated Timestamp\nLAST_UPDATED="${new Date().toISOString()}"`,
+            'kiosk-conf': `# StreamPulse Master Kiosk Configuration\n# Path: /opt/streampulse/config/kiosk.conf\n\nDASHBOARD_URL="${kioskDashboardUrl}"\nKIOSK_USER="${kioskTargetUser.includes('auto') ? 'DETECTED_USER' : kioskTargetUser}"\nBROWSER_PROFILE_DIR="/opt/streampulse/chromium-profile"\nBROWSER_ENGINE="auto"\nSCREEN_WIDTH=1920\nSCREEN_HEIGHT=1080\nHIDE_CURSOR=1\nDISABLE_SCREEN_BLANKING=1\nWAIT_NETWORK_TIMEOUT=30\nRESTART_DELAY_SEC=3\nCHROMIUM_EXTRA_FLAGS=(\n  "--password-store=basic"\n  "--noerrdialogs"\n  "--disable-infobars"\n  "--kiosk"\n  "--start-fullscreen"\n  "--fullscreen"\n  "--no-first-run"\n  "--disable-restore-session-state"\n  "--disable-session-crashed-bubble"\n  "--autoplay-policy=no-user-gesture-required"\n  "--check-for-update-interval=31536000"\n  "--disable-component-update"\n  "--disable-features=TranslateUI"\n  "--disable-save-password-bubble"\n  "--allow-file-access-from-files"\n  "--disable-web-security"\n  "--disable-gpu"\n  "--window-position=0,0"\n  "--window-size=1920,1080"\n)`
+          }));
+        }
+      } catch (err) {
+        console.error('Failed to update universal script preview:', err);
+      }
+    };
+    updatePreviews();
+    return () => { active = false; };
+  }, [piChannel, kioskDashboardUrl, kioskTargetUser]);
 
   // Save Config handler
   const handleSaveConfig = async (e: React.FormEvent) => {
@@ -485,7 +565,7 @@ export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams
 
               <div className="flex items-center gap-2">
                 <a
-                  href={`/api/rpi-player/script/universal-install?channel=${encodeURIComponent(piChannel)}&streamKey=${encodeURIComponent(selectedStreamKey || 'live_stream')}&dashboardUrl=${encodeURIComponent(kioskDashboardUrl)}`}
+                  href={`/api/rpi-player/script/universal-install?channel=${encodeURIComponent(piChannel)}&dashboardUrl=${encodeURIComponent(kioskDashboardUrl)}`}
                   download="full-install.sh"
                   className="inline-flex items-center gap-2 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg shadow-lg shadow-emerald-900/30 transition-colors"
                 >
@@ -517,20 +597,44 @@ export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams
 
             {/* Target Config Controls */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950 border border-slate-800 rounded-lg p-4">
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">
-                  Assigned Pi Channel <span className="text-emerald-400 font-mono text-[10px]">(Stable Channel Identity)</span>
-                </label>
-                <input
-                  type="text"
-                  value={piChannel}
-                  onChange={(e) => setPiChannel(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-indigo-400 font-mono focus:outline-none focus:border-indigo-500"
-                  placeholder="e.g. channel1, auditorium, lobby"
-                />
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-medium text-slate-300">
+                    Assigned Pi Channel <span className="text-emerald-400 font-mono text-[10px]">(Stable Channel Identity)</span>
+                  </label>
+                  <span className="text-[10px] font-mono text-indigo-400 bg-indigo-950/60 px-1.5 py-0.5 rounded border border-indigo-800/60">
+                    Selected: {piChannel}
+                  </span>
+                </div>
+                <select
+                  value={channelOptions.some(o => o.value === piChannel) ? piChannel : 'custom'}
+                  onChange={(e) => {
+                    if (e.target.value !== 'custom') {
+                      setPiChannel(e.target.value);
+                    }
+                  }}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-indigo-200 font-medium focus:outline-none focus:border-indigo-500"
+                >
+                  {channelOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                  <option value="custom">Custom Identity (Manual Entry)...</option>
+                </select>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-slate-400 font-mono">Stable ID:</span>
+                  <input
+                    type="text"
+                    value={piChannel}
+                    onChange={(e) => setPiChannel(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
+                    className="flex-1 bg-slate-900 border border-slate-700 rounded px-2.5 py-1 text-xs text-indigo-300 font-mono focus:outline-none focus:border-indigo-500"
+                    placeholder="e.g. channel1, channel2"
+                  />
+                </div>
               </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">Target Dashboard URL</label>
+              <div className="space-y-2">
+                <label className="block text-xs font-medium text-slate-300">Target Dashboard URL</label>
                 <input
                   type="text"
                   value={kioskDashboardUrl}
@@ -538,6 +642,9 @@ export const RaspberryPlayer: React.FC<RaspberryPlayerProps> = ({ token, streams
                   className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-emerald-400 font-mono focus:outline-none focus:border-emerald-500"
                   placeholder="http://187.127.210.81/"
                 />
+                <p className="text-[10px] text-slate-500 leading-tight">
+                  Central StreamPulse dashboard or VPS server address reachable by the Raspberry Pi.
+                </p>
               </div>
             </div>
 

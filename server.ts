@@ -2984,8 +2984,16 @@ async function startServer() {
       const existingStreams = await db.getStreams();
 
       // Determine stable channel identity
-      let targetChannelId = (req.body.channelId || req.body.channel || '').toString().trim();
-      if (!targetChannelId) {
+      let targetChannelId = '';
+      if (req.body.channelNumber !== undefined && req.body.channelNumber !== null && req.body.channelNumber !== '') {
+        const num = parseInt(req.body.channelNumber, 10);
+        if (isNaN(num) || num < 1) {
+          return res.status(400).json({ error: 'Channel number must be a positive integer (e.g. 1, 2, 3...)' });
+        }
+        targetChannelId = `channel${num}`;
+      } else if (req.body.channelId || req.body.channel) {
+        targetChannelId = (req.body.channelId || req.body.channel).toString().trim();
+      } else {
         const match = title.match(/^channel[\s-_]?([0-9]+)$/i);
         if (match) {
           targetChannelId = `channel${match[1]}`;
@@ -3015,8 +3023,10 @@ async function startServer() {
       });
 
       if (isDuplicate) {
+        const channelNumMatch = normalizedChannelId.match(/^channel([0-9]+)$/);
+        const channelNumDisplay = channelNumMatch ? `Channel ${channelNumMatch[1]}` : normalizedChannelId;
         return res.status(400).json({ 
-          error: `Channel identifier '${normalizedChannelId}' is already in use. Duplicate channel identities are not permitted.` 
+          error: `${channelNumDisplay} (${normalizedChannelId}) is already in use by an existing broadcast. Please select a unique channel number.` 
         });
       }
 
@@ -4950,12 +4960,27 @@ async function startServer() {
       const defaultHost = `${isHttps ? 'https' : 'http'}://${host}`;
       
       const targetUrl = (req.query.dashboardUrl || req.query.url || 'http://187.127.210.81/' || defaultHost).toString();
-      const streamKey = (req.query.streamKey || req.query.key || rpiPlayerSystem.getConfig()?.defaultStreamKey || 'live_stream').toString();
-      const channelName = (req.query.channel || req.query.channelName || 'channel1').toString();
+      const rawChannel = (req.query.channel || req.query.channelName || req.query.channelId || 'channel1').toString().trim();
       const targetUser = (req.query.user || '').toString();
       const serverHost = (req.query.serverUrl || defaultHost || 'http://187.127.210.81').toString();
 
-      const script = rpiPlayerSystem.generateUniversalInstallerScript(targetUrl, streamKey, channelName, targetUser, serverHost);
+      // Validate stable channel identity (reject temporary broadcast session keys)
+      if (rawChannel.startsWith('live_')) {
+        return res.status(400).send(`#!/usr/bin/env bash\necho "[ERROR] Invalid channel '${rawChannel}'. Temporary broadcast session keys (live_...) cannot be used as stable channel identities." >&2\nexit 1\n`);
+      }
+
+      let cleanChannel = rawChannel.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+      if (/^[0-9]+$/.test(cleanChannel)) {
+        cleanChannel = `channel${cleanChannel}`;
+      }
+      if (!cleanChannel) {
+        cleanChannel = 'channel1';
+      }
+
+      // Default stream key for dynamic runtime discovery (never temporary broadcast keys)
+      const streamKey = 'live_stream';
+
+      const script = rpiPlayerSystem.generateUniversalInstallerScript(targetUrl, streamKey, cleanChannel, targetUser, serverHost);
       res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
       res.setHeader('Content-Disposition', 'inline; filename="full-install.sh"');
       res.status(200).send(script);

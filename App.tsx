@@ -54,6 +54,7 @@ import {
   ChevronUp,
   Sliders,
   Info,
+  Radio,
   Eye,
   EyeOff
 } from 'lucide-react';
@@ -164,9 +165,11 @@ const App: React.FC = () => {
   });
 
   const [isGeneratingKey, setIsGeneratingKey] = useState(false);
+  const [streamCreateError, setStreamCreateError] = useState<string | null>(null);
   const [newStreamData, setNewStreamData] = useState({ 
     title: '', 
     broadcaster: '', 
+    channelNumber: 1,
     streamKey: '',
     thumbnailUrl: '',
     resolution: '1080p' as StreamSession['resolution'],
@@ -180,6 +183,34 @@ const App: React.FC = () => {
     audioNormalize: false,
     audioDelay: 0
   });
+
+  // Track used channel numbers to assist creation flow
+  const usedChannelNumbers = React.useMemo(() => {
+    const set = new Set<number>();
+    streams.forEach(s => {
+      const ch = s.channelId || s.id || '';
+      const m = ch.match(/^channel([0-9]+)$/i);
+      if (m) {
+        set.add(parseInt(m[1], 10));
+      }
+    });
+    return set;
+  }, [streams]);
+
+  const nextAvailableChannelNumber = React.useMemo(() => {
+    let n = 1;
+    while (usedChannelNumbers.has(n)) {
+      n++;
+    }
+    return n;
+  }, [usedChannelNumbers]);
+
+  // Keep default channelNumber aligned with lowest available channel number
+  useEffect(() => {
+    if (!newStreamData.title) {
+      setNewStreamData(prev => ({ ...prev, channelNumber: nextAvailableChannelNumber }));
+    }
+  }, [nextAvailableChannelNumber]);
 
   const [manualSelectedResolutions, setManualSelectedResolutions] = useState<string[]>(['Original', '1080p', '720p', '480p', '360p']);
   const [manualProfiles, setManualProfiles] = useState<CustomOutputProfile[]>([
@@ -600,7 +631,13 @@ CREATE TABLE IF NOT EXISTS streams (
       }
       const data = await safeParseJson(res);
       if (Array.isArray(data)) {
-        setStreams(data);
+        const seen = new Set<string>();
+        const unique = data.filter((s: StreamSession) => {
+          if (!s || !s.id || seen.has(s.id)) return false;
+          seen.add(s.id);
+          return true;
+        });
+        setStreams(unique);
       }
     } catch (err: any) {
       console.warn('Network notice while fetching streams:', err?.message || err);
@@ -932,7 +969,7 @@ CREATE TABLE IF NOT EXISTS streams (
                 } else if (msg.stream) {
                   const user = currentUserRef.current;
                   if (user?.role === 'admin' || user?.assigned_stream_id === msg.stream.id || msg.stream.userId === user?.id) {
-                    return [msg.stream, ...prevStreams];
+                    return [msg.stream, ...prevStreams.filter(s => s.id !== msg.stream.id)];
                   }
                 }
                 return prevStreams;
@@ -947,7 +984,7 @@ CREATE TABLE IF NOT EXISTS streams (
                 }
                 const user = currentUserRef.current;
                 if (user?.role === 'admin' || user?.assigned_stream_id === msg.stream.id || msg.stream.userId === user?.id) {
-                  return [msg.stream, ...prevStreams];
+                  return [msg.stream, ...prevStreams.filter(s => s.id !== msg.stream.id)];
                 }
                 return prevStreams;
               });
@@ -1030,7 +1067,11 @@ CREATE TABLE IF NOT EXISTS streams (
 
   // Handle Stream Creation via API
   const handleCreateStream = async () => {
-    if (!newStreamData.title || !newStreamData.broadcaster) return;
+    setStreamCreateError(null);
+    if (!newStreamData.title || !newStreamData.broadcaster) {
+      setStreamCreateError('Channel Name and Broadcaster Handle are required.');
+      return;
+    }
     
     setIsGeneratingKey(true);
     const scheduledStart = newStreamData.isScheduled ? `${newStreamData.scheduledDate}T${newStreamData.scheduledTime}:00` : undefined;
@@ -1075,6 +1116,8 @@ CREATE TABLE IF NOT EXISTS streams (
         },
         body: JSON.stringify({
           title: newStreamData.title,
+          channelName: newStreamData.title,
+          channelNumber: Number(newStreamData.channelNumber) || 1,
           broadcaster: newStreamData.broadcaster,
           resolution: newStreamData.resolution,
           enabledProfiles: enabledProfilesStr,
@@ -1090,16 +1133,27 @@ CREATE TABLE IF NOT EXISTS streams (
       });
 
       if (!res.ok) {
-        throw new Error('Failed to create stream');
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || 'Failed to create channel broadcast');
       }
 
       const createdStream = await res.json();
-      setStreams(prev => [createdStream, ...prev]);
+      setStreams(prev => [createdStream, ...prev.filter(s => s.id !== createdStream.id)]);
+      setStreamCreateError(null);
+
+      // Find next free number after creating
+      const updatedUsed = new Set(usedChannelNumbers);
+      updatedUsed.add(Number(newStreamData.channelNumber) || 1);
+      let nextNum = 1;
+      while (updatedUsed.has(nextNum)) {
+        nextNum++;
+      }
 
       // Reset form
       setNewStreamData({ 
         title: '', 
         broadcaster: '', 
+        channelNumber: nextNum,
         streamKey: '', 
         thumbnailUrl: '', 
         resolution: '1080p',
@@ -1113,8 +1167,9 @@ CREATE TABLE IF NOT EXISTS streams (
         audioNormalize: false,
         audioDelay: 0
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setStreamCreateError(err.message || 'Failed to create channel');
     } finally {
       setIsGeneratingKey(false);
     }
@@ -1916,23 +1971,94 @@ CREATE TABLE IF NOT EXISTS streams (
                   </div>
                 </div>
                 <div className="space-y-6">
-                  {/* General Channel Info */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">Broadcaster Handle</label>
-                      <input 
-                        type="text" placeholder="e.g. dev_alex" value={newStreamData.broadcaster}
-                        onChange={(e) => setNewStreamData(prev => ({ ...prev, broadcaster: e.target.value }))}
-                        className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500/50 outline-none text-zinc-100"
-                      />
+                  {/* Channel Creation Error Banner */}
+                  {streamCreateError && (
+                    <div className="p-3.5 rounded-xl bg-red-950/60 border border-red-500/50 text-red-300 text-xs flex items-center justify-between gap-3 shadow-lg animate-in fade-in">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+                        <span>{streamCreateError}</span>
+                      </div>
+                      <button 
+                        onClick={() => setStreamCreateError(null)}
+                        className="text-red-400 hover:text-white text-xs font-bold px-2 py-0.5"
+                      >
+                        &times;
+                      </button>
                     </div>
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">Broadcast Title</label>
-                      <input 
-                        type="text" placeholder="e.g. High Performance Multi-Channel Coding" value={newStreamData.title}
-                        onChange={(e) => setNewStreamData(prev => ({ ...prev, title: e.target.value }))}
-                        className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500/50 outline-none text-zinc-100"
-                      />
+                  )}
+
+                  {/* General Channel Info & Identification */}
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      {/* Channel Name */}
+                      <div className="sm:col-span-2 space-y-1.5">
+                        <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">
+                          Channel Name <span className="text-red-400">*</span>
+                        </label>
+                        <input 
+                          type="text" 
+                          placeholder="e.g. News Channel, Main Auditorium, Sports HD" 
+                          value={newStreamData.title}
+                          onChange={(e) => setNewStreamData(prev => ({ ...prev, title: e.target.value }))}
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500/50 outline-none text-zinc-100 placeholder:text-zinc-600"
+                        />
+                      </div>
+
+                      {/* Channel Number */}
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider flex items-center justify-between">
+                          <span>Channel Number <span className="text-red-400">*</span></span>
+                          <span className="text-[9px] font-mono text-indigo-400">
+                            {usedChannelNumbers.has(Number(newStreamData.channelNumber)) ? '⚠️ In Use' : '✓ Available'}
+                          </span>
+                        </label>
+                        <select
+                          value={newStreamData.channelNumber}
+                          onChange={(e) => setNewStreamData(prev => ({ ...prev, channelNumber: parseInt(e.target.value, 10) || 1 }))}
+                          className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm font-bold text-indigo-300 focus:ring-2 focus:ring-indigo-500/50 outline-none cursor-pointer w-full"
+                        >
+                          {Array.from({ length: 20 }, (_, i) => i + 1).map(num => {
+                            const isTaken = usedChannelNumbers.has(num);
+                            return (
+                              <option key={num} value={num}>
+                                Channel {num} {isTaken ? '(In Use)' : '(Available)'}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {/* Broadcaster Handle */}
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">
+                          Broadcaster Handle <span className="text-red-400">*</span>
+                        </label>
+                        <input 
+                          type="text" 
+                          placeholder="e.g. dev_alex, studio_ops" 
+                          value={newStreamData.broadcaster}
+                          onChange={(e) => setNewStreamData(prev => ({ ...prev, broadcaster: e.target.value }))}
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500/50 outline-none text-zinc-100 placeholder:text-zinc-600"
+                        />
+                      </div>
+
+                      {/* Stable Identity & Session Preview Box */}
+                      <div className="p-3 bg-zinc-950/80 border border-indigo-900/40 rounded-xl space-y-1.5 flex flex-col justify-center">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-[10px] font-bold text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
+                            <Radio className="w-3.5 h-3.5 text-indigo-400" />
+                            Stable Channel Identity
+                          </span>
+                          <span className="text-[10px] font-mono font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded">
+                            channel{newStreamData.channelNumber || 1}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-zinc-400 leading-tight">
+                          Raspberry Pi installer links to <strong>channel{newStreamData.channelNumber || 1}</strong>. When broadcast sessions rotate, the Pi dynamically rediscovers new live feeds.
+                        </p>
+                      </div>
                     </div>
                   </div>
 

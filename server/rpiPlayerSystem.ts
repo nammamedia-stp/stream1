@@ -661,8 +661,18 @@ echo "[StreamPulse RPi Player] Player updated successfully!"`;
     const cleanDashboardUrl = rawUrl.startsWith('http://') || rawUrl.startsWith('https://') || rawUrl.startsWith('file://') ? rawUrl : `http://${rawUrl}`;
     const rawServer = (serverHost || 'http://187.127.210.81').toString().trim();
     const cleanServerHost = rawServer.startsWith('http://') || rawServer.startsWith('https://') ? rawServer : `http://${rawServer}`;
-    const cleanChannel = (channelName || 'channel1').toString().trim();
-    const cleanKey = (streamKey || 'live_stream').toString().trim();
+    
+    // Normalize and validate stable channel identity
+    let cleanChannel = (channelName || 'channel1').toString().trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    if (/^[0-9]+$/.test(cleanChannel)) {
+      cleanChannel = `channel${cleanChannel}`;
+    }
+    if (!cleanChannel || cleanChannel.startsWith('live_')) {
+      cleanChannel = 'channel1';
+    }
+
+    // Default stream key for dynamic runtime discovery (never temporary broadcast keys)
+    const cleanKey = 'live_stream';
     const cleanUser = (targetUser || '').toString().trim();
 
     let installerTemplate = safeReadTemplate('streampulse-universal-installer/full-install.sh');

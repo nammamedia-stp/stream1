@@ -1398,18 +1398,7 @@ chmod 644 /opt/streampulse/logo/* 2>/dev/null || true
 echo "[+] Writing Per-Pi Player Configuration (/opt/streampulse/config/player.conf)..."
 PLAYER_CONF="/opt/streampulse/config/player.conf"
 
-# Preserve existing stream key and channel name if installer ran with defaults on existing Pi
-if [[ -f "${PLAYER_CONF}" ]]; then
-  EXISTING_KEY="$(grep '^STREAM_KEY=' "${PLAYER_CONF}" | cut -d= -f2 | tr -d '"' || echo '')"
-  EXISTING_CH="$(grep '^CHANNEL_NAME=' "${PLAYER_CONF}" | cut -d= -f2 | tr -d '"' || echo '')"
-  if [[ "${STREAM_KEY}" == "live_stream" ]] && [[ -n "${EXISTING_KEY}" ]]; then
-    STREAM_KEY="${EXISTING_KEY}"
-  fi
-  if [[ "${CHANNEL_NAME}" == "channel1" ]] && [[ -n "${EXISTING_CH}" ]]; then
-    CHANNEL_NAME="${EXISTING_CH}"
-  fi
-fi
-
+# Write authoritative stable channel identity and default stream configuration
 cat <<CONF > "${PLAYER_CONF}"
 # StreamPulse Player & Channel Configuration
 # Managed by StreamPulse Universal Installer

@@ -5052,7 +5052,7 @@ async function startServer() {
   app.get('/api/rpi-player/version', async (req: any, res: any) => {
     try {
       const versionFile = path.resolve('./streampulse-universal-installer/VERSION');
-      let version = '2.4.0';
+      let version = '2.4.1';
       if (fs.existsSync(versionFile)) {
         version = fs.readFileSync(versionFile, 'utf-8').trim();
       }

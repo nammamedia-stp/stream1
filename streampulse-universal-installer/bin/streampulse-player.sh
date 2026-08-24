@@ -150,6 +150,7 @@ declare -a LAUNCH_ARGS=(
   "--ozone-platform=wayland"
   "--disable-gpu"
   "--disable-dev-shm-usage"
+  "--js-flags=--max-old-space-size=512"
   "--disk-cache-dir=/tmp/chromium-cache"
   "--disk-cache-size=33554432"
   "--media-cache-size=33554432"

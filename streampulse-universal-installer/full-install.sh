@@ -42,15 +42,15 @@ while [[ $# -gt 0 ]]; do
       CHANNEL_NAME="$2"
       shift 2
       ;;
-    -k|--stream-key)
+    -k|--stream-key|--key)
       STREAM_KEY="$2"
       shift 2
       ;;
-    -u|--dashboard-url)
+    -u|--dashboard-url|--url)
       DASHBOARD_URL="$2"
       shift 2
       ;;
-    -s|--server-url)
+    -s|--server-url|--server)
       SERVER_URL="$2"
       shift 2
       ;;
@@ -79,9 +79,9 @@ while [[ $# -gt 0 ]]; do
       echo ""
       echo "Options:"
       echo "  -c, --channel CHANNEL       Assigned Pi Streaming Channel (default: \"channel1\")"
-      echo "  -k, --stream-key KEY        Stream key for StreamPulse Player (default: \"live_stream\")"
-      echo "  -u, --dashboard-url URL     Target URL for Fullscreen Kiosk"
-      echo "  -s, --server-url URL        Central StreamPulse Server (default: \"http://187.127.210.81\")"
+      echo "  -k, --stream-key KEY        Stream key for StreamPulse Player (alias: --key, default: \"live_stream\")"
+      echo "  -u, --dashboard-url URL     Target URL for Fullscreen Kiosk (alias: --url)"
+      echo "  -s, --server-url URL        Central StreamPulse Server (alias: --server, default: \"http://187.127.210.81\")"
       echo "  -U, --user USERNAME         Target Linux user (auto-detected if unambiguous)"
       echo "  --no-validate               Skip post-installation 18-point verification"
       echo "  --no-backup                 Skip pre-installation backup snapshot"
@@ -1886,7 +1886,11 @@ EOF_PLAYER_LAUNCHER
 # --- 10.3 set-channel.sh ---
 cat << 'EOF_SET_CHANNEL' > /opt/streampulse/bin/set-channel.sh
 #!/usr/bin/env bash
+# ==============================================================================
 # StreamPulse Channel Switcher Utility
+# Path: /opt/streampulse/bin/set-channel.sh
+# ==============================================================================
+
 set -euo pipefail
 
 if [[ $EUID -ne 0 ]]; then
@@ -1983,13 +1987,19 @@ else
   echo "[FAIL] Verification failed. Channel in config is '${VERIFIED_CHANNEL}'." >&2
   exit 1
 fi
+
 EOF_SET_CHANNEL
 
 # --- 10.4 backup.sh ---
 cat << 'EOF_BACKUP' > /opt/streampulse/bin/backup.sh
 #!/usr/bin/env bash
+# ==============================================================================
 # StreamPulse Backup Engine
-set -euo pipefail
+# Managed by StreamPulse Universal Installer
+# Path: /opt/streampulse/bin/backup.sh
+# ==============================================================================
+
+set -uo pipefail
 
 TARGET_USER="${1:-${SUDO_USER:-$(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $3}' | grep -v '^root$' | head -n 1 || awk -F: '$3 >= 1000 && $3 < 60000 {print $1}' /etc/passwd | head -n1 || echo '')}}"
 if [[ -z "${TARGET_USER}" ]]; then
@@ -2041,12 +2051,18 @@ chown -R "${TARGET_USER}:${TARGET_USER}" "${BACKUP_BASE}" 2>/dev/null || true
 ln -sfn "${BACKUP_DIR}" "${BACKUP_BASE}/latest"
 
 echo "Backup completed successfully -> ${BACKUP_DIR}"
+
 EOF_BACKUP
 
 # --- 10.5 restore.sh ---
 cat << 'EOF_RESTORE' > /opt/streampulse/bin/restore.sh
 #!/usr/bin/env bash
+# ==============================================================================
 # StreamPulse Restoration Engine
+# Managed by StreamPulse Universal Installer
+# Path: /opt/streampulse/bin/restore.sh
+# ==============================================================================
+
 set -euo pipefail
 
 if [[ $EUID -ne 0 ]]; then
@@ -2089,12 +2105,17 @@ if systemctl is-enabled --quiet streampulse-player.service 2>/dev/null || system
 fi
 
 echo "[OK] System configuration successfully restored from snapshot."
+
 EOF_RESTORE
 
 # --- 10.6 diagnose.sh ---
 cat << 'EOF_DIAGNOSE' > /opt/streampulse/bin/diagnose.sh
 #!/usr/bin/env bash
+# ==============================================================================
 # StreamPulse Diagnostic Engine
+# Path: /opt/streampulse/bin/diagnose.sh
+# ==============================================================================
+
 set -uo pipefail
 
 echo "======================================================================"
@@ -2155,6 +2176,7 @@ fi
 echo "  IP Address:  $(hostname -I 2>/dev/null || echo 'none')"
 echo "  Display:     ${DISPLAY:-:0} | Wayland: ${WAYLAND_DISPLAY:-wayland-0}"
 echo "======================================================================"
+
 EOF_DIAGNOSE
 
 # --- 10.8 streampulse-update.sh ---
@@ -2258,9 +2280,11 @@ echo "[StreamPulse Update] Applying StreamPulse update payload (${REMOTE_VERSION
 CHANNEL="$(grep '^CHANNEL_NAME=' "${PLAYER_CONF}" 2>/dev/null | cut -d= -f2- | tr -d '"\r\n' || echo 'channel1')"
 STREAM_KEY="$(grep '^STREAM_KEY=' "${PLAYER_CONF}" 2>/dev/null | cut -d= -f2- | tr -d '"\r\n' || echo 'live_stream')"
 
-if bash "${UPDATE_SCRIPT}" --channel "${CHANNEL}" --key "${STREAM_KEY}" --server "${SERVER_URL}" --no-validate; then
+UPDATE_SUCCESS=0
+if bash "${UPDATE_SCRIPT}" --channel "${CHANNEL}" --stream-key "${STREAM_KEY}" --server-url "${SERVER_URL}" --no-validate; then
   echo "${REMOTE_VERSION}" > "${VERSION_FILE}"
   echo "[StreamPulse Update] [SUCCESS] StreamPulse successfully updated to version ${REMOTE_VERSION}!"
+  UPDATE_SUCCESS=1
   
   # Trigger post-update validation if available
   if [[ -x "/opt/streampulse/bin/validate.sh" ]]; then
@@ -2292,7 +2316,13 @@ fi
 
 # Clean temporary staging
 rm -rf "${STAGING_DIR}"
-exit 0
+
+if (( UPDATE_SUCCESS == 1 )); then
+  exit 0
+else
+  exit 1
+fi
+
 EOF_UPDATE
 
 # Write authoritative VERSION file

@@ -97,9 +97,11 @@ echo "[StreamPulse Update] Applying StreamPulse update payload (${REMOTE_VERSION
 CHANNEL="$(grep '^CHANNEL_NAME=' "${PLAYER_CONF}" 2>/dev/null | cut -d= -f2- | tr -d '"\r\n' || echo 'channel1')"
 STREAM_KEY="$(grep '^STREAM_KEY=' "${PLAYER_CONF}" 2>/dev/null | cut -d= -f2- | tr -d '"\r\n' || echo 'live_stream')"
 
-if bash "${UPDATE_SCRIPT}" --channel "${CHANNEL}" --key "${STREAM_KEY}" --server "${SERVER_URL}" --no-validate; then
+UPDATE_SUCCESS=0
+if bash "${UPDATE_SCRIPT}" --channel "${CHANNEL}" --stream-key "${STREAM_KEY}" --server-url "${SERVER_URL}" --no-validate; then
   echo "${REMOTE_VERSION}" > "${VERSION_FILE}"
   echo "[StreamPulse Update] [SUCCESS] StreamPulse successfully updated to version ${REMOTE_VERSION}!"
+  UPDATE_SUCCESS=1
   
   # Trigger post-update validation if available
   if [[ -x "/opt/streampulse/bin/validate.sh" ]]; then
@@ -131,4 +133,9 @@ fi
 
 # Clean temporary staging
 rm -rf "${STAGING_DIR}"
-exit 0
+
+if (( UPDATE_SUCCESS == 1 )); then
+  exit 0
+else
+  exit 1
+fi
